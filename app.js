@@ -529,10 +529,10 @@
     for (const sl of slots) {
       if (sl.start >= assign.start - 1e-9 && sl.end <= assign.end + 1e-9) {
         if (!isNewbie(staff)) headNeed.set(sl.start, headNeed.get(sl.start) - 1);
-        const sk = skillNeed.get(sl.start);
-        (staff.skills || []).forEach(skName => {
-          if (sk[skName] !== undefined) sk[skName] = Math.max(0, sk[skName] - 1);
-        });
+        if (assign.role) {
+          const sk = skillNeed.get(sl.start);
+          if (sk[assign.role] !== undefined) sk[assign.role] = Math.max(0, sk[assign.role] - 1);
+        }
       }
     }
   }
@@ -580,17 +580,29 @@
     return false;
   }
 
-  function scoreCandidate(cand, slots, headNeed, skillNeed, staffMap) {
-    let score = 0;
+  // 一人のスタッフは1回のシフトで1つの役割(スキル)しか担当できない前提で、
+  // そのスタッフが担当するのに最も貢献度の高い役割を1つだけ選んでスコア化する。
+  function bestRoleAndScore(cand, slots, headNeed, skillNeed, staffMap) {
     const staff = staffMap[cand.staffId];
+    let headScore = 0;
     for (const sl of slots) {
       if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
-        if (!isNewbie(staff) && headNeed.get(sl.start) > 0) score += 1;
-        const sk = skillNeed.get(sl.start);
-        (staff.skills || []).forEach(skName => { if (sk[skName] > 0) score += 2; });
+        if (!isNewbie(staff) && headNeed.get(sl.start) > 0) headScore += 1;
       }
     }
-    return score;
+    let bestRole = null;
+    let bestSkillScore = 0;
+    (staff.skills || []).forEach(skName => {
+      let s = 0;
+      for (const sl of slots) {
+        if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
+          const sk = skillNeed.get(sl.start);
+          if (sk[skName] > 0) s += 1;
+        }
+      }
+      if (s > bestSkillScore) { bestSkillScore = s; bestRole = skName; }
+    });
+    return { score: headScore + bestSkillScore * 2, role: bestRole };
   }
 
   function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours) {
@@ -609,23 +621,25 @@
     }
 
     while (totalUnmet() > 0 && remaining.length > 0) {
-      let best = null, bestScore = -Infinity;
+      let best = null, bestScore = -Infinity, bestRole = null;
       for (const cand of remaining) {
-        let score = scoreCandidate(cand, slots, headNeed, skillNeed, staffMap);
+        const { score: rawScore, role } = bestRoleAndScore(cand, slots, headNeed, skillNeed, staffMap);
+        let score = rawScore;
         if (score <= 0) continue;
         if (hasConflict(cand, picked, staffMap)) score -= 1000;
         score -= (cumulativeHours[cand.staffId] || 0) * 0.01;
         score -= (cand.end - cand.start) * 0.001;
-        if (score > bestScore) { bestScore = score; best = cand; }
+        if (score > bestScore) { bestScore = score; best = cand; bestRole = role; }
       }
       if (!best) break;
-      picked.push(best);
+      const assign = { staffId: best.staffId, start: best.start, end: best.end, role: bestRole };
+      picked.push(assign);
       remaining = remaining.filter(c => c !== best);
-      applyAssignmentToNeed(best, slots, headNeed, skillNeed, staffMap[best.staffId]);
+      applyAssignmentToNeed(assign, slots, headNeed, skillNeed, staffMap[best.staffId]);
     }
 
     const shortages = deriveShortages(slots, headNeed, skillNeed);
-    return { assignments: picked.map(c => ({ staffId: c.staffId, start: c.start, end: c.end })), shortages };
+    return { assignments: picked, shortages };
   }
 
   function generateForMonth(ym) {
@@ -699,20 +713,26 @@
         const staff = staffMap[a.staffId];
         totalHours[a.staffId] += (a.end - a.start);
         const newbieTag = isNewbie(staff) ? '(新人)' : '';
-        html += `<span class="assign-chip">${escapeHtml(staff ? staff.name : '?')}${newbieTag} ${hoursToTimeStr(a.start)}-${hoursToTimeStr(a.end)}
+        const roleTag = a.role ? `[${escapeHtml(a.role)}]` : '';
+        html += `<span class="assign-chip">${escapeHtml(staff ? staff.name : '?')}${newbieTag} ${hoursToTimeStr(a.start)}-${hoursToTimeStr(a.end)}${roleTag}
           <button type="button" class="remove-assign-btn" data-date="${d.dateStr}" data-idx="${idx}">×</button></span>`;
       });
       html += '</div>';
       dayResult.shortages.forEach(sh => {
-        const skillTxt = sh.missingSkills.length ? ' / 不足スキル: ' + sh.missingSkills.join('、') : '';
-        html += `<div class="shortage-warning">⚠ ${hoursToTimeStr(sh.start)}-${hoursToTimeStr(sh.end)} 人数不足${sh.headShort > 0 ? '(' + sh.headShort + '人)' : ''}${skillTxt}</div>`;
+        const parts = [];
+        if (sh.headShort > 0) parts.push(`人数不足(${sh.headShort}人)`);
+        if (sh.missingSkills.length) parts.push('不足スキル: ' + sh.missingSkills.join('、'));
+        html += `<div class="shortage-warning">⚠ ${hoursToTimeStr(sh.start)}-${hoursToTimeStr(sh.end)} ${parts.join(' / ')}</div>`;
       });
       const candidates = DATA.staff.filter(s => !assignedIds.has(s.id));
       if (candidates.length > 0) {
+        const roleOptionsFor = (s) => `<option value="">役割なし(接客)</option>` +
+          (s.skills || []).map(sk => `<option value="${escapeHtml(sk)}">${escapeHtml(sk)}</option>`).join('');
         html += `<div class="add-assign-row">
           <select class="add-staff-select">
             ${candidates.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}
           </select>
+          <select class="add-role-select">${roleOptionsFor(candidates[0])}</select>
           <input type="time" class="add-start-time" value="${hoursToTimeStr(DATA.settings.openTime)}">
           <input type="time" class="add-end-time" value="${hoursToTimeStr(DATA.settings.closeTime)}">
           <button type="button" class="secondary add-assign-btn" data-date="${d.dateStr}">追加</button>
@@ -745,15 +765,25 @@
         renderGenerateResult();
       });
     });
+    wrap.querySelectorAll('.add-assign-row').forEach(row => {
+      const staffSelect = row.querySelector('.add-staff-select');
+      const roleSelect = row.querySelector('.add-role-select');
+      staffSelect.addEventListener('change', () => {
+        const s = staffMap[staffSelect.value];
+        roleSelect.innerHTML = '<option value="">役割なし(接客)</option>' +
+          (s && s.skills || []).map(sk => `<option value="${escapeHtml(sk)}">${escapeHtml(sk)}</option>`).join('');
+      });
+    });
     wrap.querySelectorAll('.add-assign-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const date = btn.dataset.date;
         const row = btn.closest('.add-assign-row');
         const staffId = row.querySelector('.add-staff-select').value;
+        const role = row.querySelector('.add-role-select').value || null;
         const start = timeStrToHours(row.querySelector('.add-start-time').value);
         const end = timeStrToHours(row.querySelector('.add-end-time').value);
         if (!(start < end)) { alert('開始時刻は終了時刻より前にしてください'); return; }
-        DATA.results[ym][date].assignments.push({ staffId, start, end });
+        DATA.results[ym][date].assignments.push({ staffId, start, end, role });
         recomputeShortages(ym, date);
         saveData(DATA);
         renderGenerateResult();
@@ -773,14 +803,14 @@
     if (!monthResult) { alert('先にシフトを自動生成してください'); return; }
     const staffMap = {};
     DATA.staff.forEach(s => { staffMap[s.id] = s; });
-    const rows = [['日付', '曜日', 'スタッフ', '開始', '終了']];
+    const rows = [['日付', '曜日', 'スタッフ', '開始', '終了', '役割']];
     getDatesInMonth(ym).forEach(d => {
       const dayResult = monthResult[d.dateStr];
       if (!dayResult || dayResult.assignments.length === 0) {
-        rows.push([d.dateStr, d.weekday, '', '', '']);
+        rows.push([d.dateStr, d.weekday, '', '', '', '']);
       } else {
         dayResult.assignments.forEach(a => {
-          rows.push([d.dateStr, d.weekday, staffMap[a.staffId] ? staffMap[a.staffId].name : '', hoursToTimeStr(a.start), hoursToTimeStr(a.end)]);
+          rows.push([d.dateStr, d.weekday, staffMap[a.staffId] ? staffMap[a.staffId].name : '', hoursToTimeStr(a.start), hoursToTimeStr(a.end), a.role || '']);
         });
       }
     });
