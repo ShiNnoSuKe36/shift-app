@@ -432,7 +432,10 @@
       wrap.innerHTML = '<p class="help-text">スキル条件はありません</p>';
       return;
     }
-    wrap.innerHTML = DATA.settings.requiredSkills.map((r, i) => `
+    wrap.innerHTML = DATA.settings.requiredSkills.map((r, i) => {
+      const start = r.start != null ? r.start : DATA.settings.openTime;
+      const end = r.end != null ? r.end : DATA.settings.closeTime;
+      return `
       <div class="form-row" data-idx="${i}">
         <select class="req-skill-select">
           ${allSkills.length === 0
@@ -440,8 +443,12 @@
             : allSkills.map(sk => `<option value="${escapeHtml(sk)}" ${sk === r.skill ? 'selected' : ''}>${escapeHtml(sk)}</option>`).join('')}
         </select>
         <input type="number" class="req-skill-count" min="0" step="1" value="${r.count}" style="width:70px">
+        <label>時間帯 <input type="time" class="req-skill-start" value="${hoursToTimeStr(start)}"></label>
+        〜
+        <input type="time" class="req-skill-end" value="${hoursToTimeStr(end)}">
         <button type="button" class="secondary req-skill-remove">削除</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     wrap.querySelectorAll('[data-idx]').forEach(row => {
       const idx = Number(row.dataset.idx);
@@ -451,6 +458,14 @@
       });
       row.querySelector('.req-skill-count').addEventListener('change', (e) => {
         DATA.settings.requiredSkills[idx].count = Number(e.target.value) || 0;
+        saveData(DATA);
+      });
+      row.querySelector('.req-skill-start').addEventListener('change', (e) => {
+        DATA.settings.requiredSkills[idx].start = timeStrToHours(e.target.value);
+        saveData(DATA);
+      });
+      row.querySelector('.req-skill-end').addEventListener('change', (e) => {
+        DATA.settings.requiredSkills[idx].end = timeStrToHours(e.target.value);
         saveData(DATA);
       });
       row.querySelector('.req-skill-remove').addEventListener('click', () => {
@@ -464,7 +479,12 @@
   function bindCoverageForm() {
     document.getElementById('add-required-skill').addEventListener('click', () => {
       const allSkills = getAllSkills();
-      DATA.settings.requiredSkills.push({ skill: allSkills[0] || '', count: 1 });
+      DATA.settings.requiredSkills.push({
+        skill: allSkills[0] || '',
+        count: 1,
+        start: DATA.settings.openTime,
+        end: DATA.settings.closeTime
+      });
       saveData(DATA);
       renderRequiredSkillsList();
     });
@@ -491,10 +511,17 @@
 
   function buildNeedMaps(settings, slots) {
     const headNeed = new Map(slots.map(sl => [sl.start, settings.minHeadcount]));
-    const skillNeed = new Map(slots.map(sl => [
-      sl.start,
-      Object.fromEntries((settings.requiredSkills || []).filter(r => r.skill).map(r => [r.skill, r.count]))
-    ]));
+    const skillNeed = new Map(slots.map(sl => [sl.start, {}]));
+    (settings.requiredSkills || []).filter(r => r.skill).forEach(r => {
+      const rStart = r.start != null ? r.start : settings.openTime;
+      const rEnd = r.end != null ? r.end : settings.closeTime;
+      slots.forEach(sl => {
+        if (sl.start >= rStart - 1e-9 && sl.end <= rEnd + 1e-9) {
+          const sk = skillNeed.get(sl.start);
+          sk[r.skill] = (sk[r.skill] || 0) + r.count;
+        }
+      });
+    });
     return { headNeed, skillNeed };
   }
 
