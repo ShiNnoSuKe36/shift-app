@@ -19,7 +19,10 @@
   function defaultData() {
     return {
       staff: [],
-      settings: { openTime: 9, closeTime: 20.5, minHeadcount: 2, requiredSkills: [] },
+      settings: {
+        openTime: 9, closeTime: 20.5, minHeadcount: 2,
+        requiredSkills: [], headcountRules: [], holidays: []
+      },
       availability: {},
       results: {}
     };
@@ -143,6 +146,11 @@
   function isWeekendDate(dateStr) {
     const [y, m, d] = dateStr.split('-').map(Number);
     return [0, 6].includes(new Date(y, m - 1, d).getDay());
+  }
+
+  function getDayType(dateStr, settings) {
+    const isHoliday = (settings.holidays || []).includes(dateStr);
+    return (isWeekendDate(dateStr) || isHoliday) ? 'weekend' : 'weekday';
   }
 
   function getDefaultRangeForStaffDate(staff, dateStr, settings) {
@@ -422,7 +430,81 @@
     document.getElementById('open-time').value = hoursToTimeStr(DATA.settings.openTime);
     document.getElementById('close-time').value = hoursToTimeStr(DATA.settings.closeTime);
     document.getElementById('min-headcount').value = DATA.settings.minHeadcount;
+    renderHeadcountRulesList();
+    renderHolidaysList();
     renderRequiredSkillsList();
+  }
+
+  function renderHeadcountRulesList() {
+    const wrap = document.getElementById('headcount-rules-list');
+    DATA.settings.headcountRules = DATA.settings.headcountRules || [];
+    if (DATA.settings.headcountRules.length === 0) {
+      wrap.innerHTML = '<p class="help-text">個別ルールはありません(常に基本の最低人数が適用されます)</p>';
+      return;
+    }
+    wrap.innerHTML = DATA.settings.headcountRules.map((r, i) => `
+      <div class="form-row" data-idx="${i}">
+        <select class="rule-daytype">
+          <option value="weekday" ${r.dayType === 'weekday' ? 'selected' : ''}>平日</option>
+          <option value="weekend" ${r.dayType === 'weekend' ? 'selected' : ''}>土日祝</option>
+        </select>
+        <label>時間帯 <input type="time" class="rule-start" value="${hoursToTimeStr(r.start)}"></label>
+        〜
+        <input type="time" class="rule-end" value="${hoursToTimeStr(r.end)}">
+        <label>最低人数 <input type="number" class="rule-min" min="0" step="1" value="${r.min}" style="width:60px"></label>
+        <label>目標人数 <input type="number" class="rule-desired" min="0" step="1" value="${r.desired != null ? r.desired : r.min}" style="width:60px"></label>
+        <button type="button" class="secondary rule-remove">削除</button>
+      </div>`).join('');
+
+    wrap.querySelectorAll('[data-idx]').forEach(row => {
+      const idx = Number(row.dataset.idx);
+      row.querySelector('.rule-daytype').addEventListener('change', (e) => {
+        DATA.settings.headcountRules[idx].dayType = e.target.value;
+        saveData(DATA);
+      });
+      row.querySelector('.rule-start').addEventListener('change', (e) => {
+        DATA.settings.headcountRules[idx].start = timeStrToHours(e.target.value);
+        saveData(DATA);
+      });
+      row.querySelector('.rule-end').addEventListener('change', (e) => {
+        DATA.settings.headcountRules[idx].end = timeStrToHours(e.target.value);
+        saveData(DATA);
+      });
+      row.querySelector('.rule-min').addEventListener('change', (e) => {
+        DATA.settings.headcountRules[idx].min = Number(e.target.value) || 0;
+        saveData(DATA);
+      });
+      row.querySelector('.rule-desired').addEventListener('change', (e) => {
+        DATA.settings.headcountRules[idx].desired = Number(e.target.value) || 0;
+        saveData(DATA);
+      });
+      row.querySelector('.rule-remove').addEventListener('click', () => {
+        DATA.settings.headcountRules.splice(idx, 1);
+        saveData(DATA);
+        renderHeadcountRulesList();
+      });
+    });
+  }
+
+  function renderHolidaysList() {
+    const wrap = document.getElementById('holidays-list');
+    DATA.settings.holidays = DATA.settings.holidays || [];
+    if (DATA.settings.holidays.length === 0) {
+      wrap.innerHTML = '<p class="help-text">登録された日はありません</p>';
+      return;
+    }
+    const sorted = [...DATA.settings.holidays].sort();
+    wrap.innerHTML = sorted.map(dateStr =>
+      `<span class="assign-chip">${escapeHtml(dateStr)}
+        <button type="button" class="holiday-remove" data-date="${dateStr}">×</button></span>`
+    ).join('');
+    wrap.querySelectorAll('.holiday-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        DATA.settings.holidays = DATA.settings.holidays.filter(d => d !== btn.dataset.date);
+        saveData(DATA);
+        renderHolidaysList();
+      });
+    });
   }
 
   function renderRequiredSkillsList() {
@@ -477,6 +559,28 @@
   }
 
   function bindCoverageForm() {
+    document.getElementById('add-headcount-rule').addEventListener('click', () => {
+      DATA.settings.headcountRules = DATA.settings.headcountRules || [];
+      DATA.settings.headcountRules.push({
+        dayType: 'weekday',
+        start: DATA.settings.openTime,
+        end: DATA.settings.closeTime,
+        min: DATA.settings.minHeadcount,
+        desired: DATA.settings.minHeadcount
+      });
+      saveData(DATA);
+      renderHeadcountRulesList();
+    });
+    document.getElementById('add-holiday').addEventListener('click', () => {
+      const input = document.getElementById('holiday-date-input');
+      const dateStr = input.value;
+      if (!dateStr) return;
+      DATA.settings.holidays = DATA.settings.holidays || [];
+      if (!DATA.settings.holidays.includes(dateStr)) DATA.settings.holidays.push(dateStr);
+      saveData(DATA);
+      input.value = '';
+      renderHolidaysList();
+    });
     document.getElementById('add-required-skill').addEventListener('click', () => {
       const allSkills = getAllSkills();
       DATA.settings.requiredSkills.push({
@@ -509,8 +613,18 @@
     return slots;
   }
 
-  function buildNeedMaps(settings, slots) {
+  function buildNeedMaps(settings, slots, dayType) {
     const headNeed = new Map(slots.map(sl => [sl.start, settings.minHeadcount]));
+    const desiredExtra = new Map(slots.map(sl => [sl.start, 0]));
+    (settings.headcountRules || []).filter(r => r.dayType === dayType).forEach(r => {
+      slots.forEach(sl => {
+        if (sl.start >= r.start - 1e-9 && sl.end <= r.end + 1e-9) {
+          headNeed.set(sl.start, r.min);
+          const desired = (r.desired != null && r.desired > r.min) ? r.desired : r.min;
+          desiredExtra.set(sl.start, Math.max(0, desired - r.min));
+        }
+      });
+    });
     const skillNeed = new Map(slots.map(sl => [sl.start, {}]));
     (settings.requiredSkills || []).filter(r => r.skill).forEach(r => {
       const rStart = r.start != null ? r.start : settings.openTime;
@@ -522,7 +636,7 @@
         }
       });
     });
-    return { headNeed, skillNeed };
+    return { headNeed, desiredExtra, skillNeed };
   }
 
   function applyAssignmentToNeed(assign, slots, headNeed, skillNeed, staff) {
@@ -569,6 +683,28 @@
     return mergeConsecutive(shortages);
   }
 
+  function deriveDesiredShortages(slots, desiredExtra) {
+    const items = [];
+    for (const sl of slots) {
+      const remain = desiredExtra.get(sl.start);
+      if (remain > 0) items.push({ start: sl.start, end: sl.end, remain });
+    }
+    if (!items.length) return [];
+    const merged = [];
+    let cur = Object.assign({}, items[0]);
+    for (let i = 1; i < items.length; i++) {
+      const it = items[i];
+      if (it.remain === cur.remain && Math.abs(it.start - cur.end) < 1e-9) {
+        cur.end = it.end;
+      } else {
+        merged.push(cur);
+        cur = Object.assign({}, it);
+      }
+    }
+    merged.push(cur);
+    return merged;
+  }
+
   function hasConflict(cand, picked, staffMap) {
     const staff = staffMap[cand.staffId];
     for (const p of picked) {
@@ -605,9 +741,9 @@
     return { score: headScore + bestSkillScore * 2, role: bestRole };
   }
 
-  function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours) {
+  function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours, dayType) {
     const slots = buildSlots(settings.openTime, settings.closeTime, 0.5);
-    const { headNeed, skillNeed } = buildNeedMaps(settings, slots);
+    const { headNeed, desiredExtra, skillNeed } = buildNeedMaps(settings, slots, dayType);
     let remaining = dayAvail.slice();
     const picked = [];
 
@@ -639,7 +775,51 @@
     }
 
     const shortages = deriveShortages(slots, headNeed, skillNeed);
-    return { assignments: picked, shortages };
+
+    // 最低人数(必須)を満たした後、余裕があれば「目標人数」まで追加で配置を試みる。
+    // 満たせなくても不足警告にはしない(あくまで努力目標)。
+    function totalDesiredUnmet() {
+      let unmet = 0;
+      for (const sl of slots) unmet += Math.max(0, desiredExtra.get(sl.start));
+      return unmet;
+    }
+    while (totalDesiredUnmet() > 0 && remaining.length > 0) {
+      let best = null, bestScore = -Infinity;
+      for (const cand of remaining) {
+        let score = 0;
+        for (const sl of slots) {
+          if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9 && desiredExtra.get(sl.start) > 0) {
+            score += 1;
+          }
+        }
+        if (score <= 0) continue;
+        if (hasConflict(cand, picked, staffMap)) score -= 1000;
+        score -= (cumulativeHours[cand.staffId] || 0) * 0.01;
+        score -= (cand.end - cand.start) * 0.001;
+        if (score > bestScore) { bestScore = score; best = cand; }
+      }
+      if (!best) break;
+      const { role } = bestRoleAndScore(best, slots, headNeed, skillNeed, staffMap);
+      const assign = { staffId: best.staffId, start: best.start, end: best.end, role, desiredOnly: true };
+      picked.push(assign);
+      remaining = remaining.filter(c => c !== best);
+      for (const sl of slots) {
+        if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
+          desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
+        }
+      }
+      if (role) {
+        for (const sl of slots) {
+          if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
+            const sk = skillNeed.get(sl.start);
+            if (sk[role] !== undefined) sk[role] = Math.max(0, sk[role] - 1);
+          }
+        }
+      }
+    }
+
+    const desiredShortages = deriveDesiredShortages(slots, desiredExtra);
+    return { assignments: picked, shortages, desiredShortages };
   }
 
   function generateForMonth(ym) {
@@ -664,7 +844,8 @@
         const end = Math.min(rec.end, DATA.settings.closeTime);
         if (start < end) dayAvail.push({ staffId: s.id, start, end });
       });
-      const dayResult = solveDayCoverage(dayAvail, DATA.settings, staffMap, cumulativeHours);
+      const dayType = getDayType(d.dateStr, DATA.settings);
+      const dayResult = solveDayCoverage(dayAvail, DATA.settings, staffMap, cumulativeHours, dayType);
       dayResult.assignments.forEach(a => { cumulativeHours[a.staffId] += (a.end - a.start); });
       result[d.dateStr] = dayResult;
     });
@@ -679,11 +860,18 @@
     const staffMap = {};
     DATA.staff.forEach(s => { staffMap[s.id] = s; });
     const slots = buildSlots(DATA.settings.openTime, DATA.settings.closeTime, 0.5);
-    const { headNeed, skillNeed } = buildNeedMaps(DATA.settings, slots);
+    const dayType = getDayType(date, DATA.settings);
+    const { headNeed, desiredExtra, skillNeed } = buildNeedMaps(DATA.settings, slots, dayType);
     DATA.results[ym][date].assignments.forEach(a => {
       applyAssignmentToNeed(a, slots, headNeed, skillNeed, staffMap[a.staffId] || { skills: [] });
+      for (const sl of slots) {
+        if (sl.start >= a.start - 1e-9 && sl.end <= a.end + 1e-9) {
+          desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
+        }
+      }
     });
     DATA.results[ym][date].shortages = deriveShortages(slots, headNeed, skillNeed);
+    DATA.results[ym][date].desiredShortages = deriveDesiredShortages(slots, desiredExtra);
   }
 
   // ---------- generate tab rendering ----------
@@ -723,6 +911,9 @@
         if (sh.headShort > 0) parts.push(`人数不足(${sh.headShort}人)`);
         if (sh.missingSkills.length) parts.push('不足スキル: ' + sh.missingSkills.join('、'));
         html += `<div class="shortage-warning">⚠ ${hoursToTimeStr(sh.start)}-${hoursToTimeStr(sh.end)} ${parts.join(' / ')}</div>`;
+      });
+      (dayResult.desiredShortages || []).forEach(ds => {
+        html += `<div class="desired-note">◯ ${hoursToTimeStr(ds.start)}-${hoursToTimeStr(ds.end)} 目標人数まであと${ds.remain}人(最低人数は満たしています)</div>`;
       });
       const candidates = DATA.staff.filter(s => !assignedIds.has(s.id));
       if (candidates.length > 0) {

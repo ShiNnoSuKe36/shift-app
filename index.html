@@ -107,7 +107,19 @@
         <label>閉店時刻 <input type="time" id="close-time" required></label>
       </div>
       <div class="form-row">
-        <label>常時必要な最低人数 <input type="number" id="min-headcount" min="0" step="1" required></label>
+        <label>基本の最低人数(下のルールに当てはまらない時間帯に適用) <input type="number" id="min-headcount" min="0" step="1" required></label>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">曜日・時間帯ごとの人数ルール</label>
+        <div id="headcount-rules-list"></div>
+        <button type="button" id="add-headcount-rule">人数ルールを追加</button>
+        <p class="help-text">「最低人数」は必ず確保する人数、「目標人数」は余裕があれば配置したい人数です(未入力なら最低人数と同じ)。目標人数まで届かなくても不足警告にはなりません。</p>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">祝日・特別休業日(登録した日は「土日祝」ルールが適用されます)</label>
+        <div id="holidays-list"></div>
+        <input type="date" id="holiday-date-input">
+        <button type="button" id="add-holiday">この日を追加</button>
       </div>
       <div class="form-row">
         <label class="avoid-label">必須スキルと必要人数</label>

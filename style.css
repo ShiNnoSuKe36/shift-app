@@ -251,6 +251,12 @@ table.avail-grid input.cell-input.invalid { background: #f6d3cc; }
   margin-top: 4px;
 }
 
+.desired-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+
 .add-assign-row {
   margin-top: 6px;
   display: flex;
