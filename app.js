@@ -5,6 +5,7 @@
   const BACKEND_URL_KEY = 'shiftAppBackendUrl';
   const SKILL_OPTIONS = ['新人', '焼き', 'フライヤー', 'お弁当', '冷凍もの'];
   const COVERAGE_SKILLS = SKILL_OPTIONS.filter(s => s !== '新人');
+  const ROLE_OPTIONS = ['社員', 'パート', 'アルバイト'];
 
   function isNewbie(staff) {
     return !!(staff && (staff.skills || []).includes('新人'));
@@ -23,7 +24,7 @@
       staff: [],
       settings: {
         openTime: 9, closeTime: 20.5, minHeadcount: 2,
-        requiredSkills: [], headcountRules: [], holidays: []
+        requiredSkills: [], headcountRules: [], holidays: [], requiredRoles: []
       },
       availability: {},
       results: {}
@@ -251,6 +252,7 @@
       const defaultText = patternLabel(s.defaultWeekday) + ' / ' + patternLabel(s.defaultWeekend);
       return `<tr>
         <td>${escapeHtml(s.name)}</td>
+        <td>${escapeHtml(s.jobRole || 'アルバイト')}</td>
         <td>${(s.hourlyWage || 0).toLocaleString()}円</td>
         <td>${skillsText}</td>
         <td>${escapeHtml(avoidNames)}</td>
@@ -289,6 +291,7 @@
 
     document.getElementById('staff-name').value = s.name;
     document.getElementById('staff-wage').value = s.hourlyWage || 0;
+    document.getElementById('staff-role').value = s.jobRole || 'アルバイト';
     document.querySelectorAll('input[name="staff-skill"]').forEach(cb => {
       cb.checked = (s.skills || []).includes(cb.value);
     });
@@ -319,6 +322,7 @@
       const name = document.getElementById('staff-name').value.trim();
       if (!name) return;
       const hourlyWage = Number(document.getElementById('staff-wage').value) || 0;
+      const jobRole = document.getElementById('staff-role').value || 'アルバイト';
       const skills = Array.from(
         document.querySelectorAll('input[name="staff-skill"]:checked')
       ).map(cb => cb.value);
@@ -347,6 +351,7 @@
           });
           s.name = name;
           s.hourlyWage = hourlyWage;
+          s.jobRole = jobRole;
           s.skills = skills;
           s.avoidWith = [...avoidWith];
           s.defaultWeekday = defaultWeekday;
@@ -355,7 +360,7 @@
         cancelStaffEdit();
       } else {
         const id = 's' + Date.now() + Math.floor(Math.random() * 1000);
-        DATA.staff.push({ id, name, hourlyWage, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend });
+        DATA.staff.push({ id, name, hourlyWage, jobRole, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend });
         avoidWith.forEach(otherId => {
           const other = DATA.staff.find(s => s.id === otherId);
           if (other) {
@@ -435,6 +440,7 @@
     renderHeadcountRulesList();
     renderHolidaysList();
     renderRequiredSkillsList();
+    renderRequiredRolesList();
   }
 
   function renderHeadcountRulesList() {
@@ -560,7 +566,67 @@
     });
   }
 
+  function renderRequiredRolesList() {
+    const wrap = document.getElementById('required-roles-list');
+    DATA.settings.requiredRoles = DATA.settings.requiredRoles || [];
+    if (DATA.settings.requiredRoles.length === 0) {
+      wrap.innerHTML = '<p class="help-text">役職条件はありません</p>';
+      return;
+    }
+    wrap.innerHTML = DATA.settings.requiredRoles.map((r, i) => {
+      const start = r.start != null ? r.start : DATA.settings.openTime;
+      const end = r.end != null ? r.end : DATA.settings.closeTime;
+      return `
+      <div class="form-row" data-idx="${i}">
+        <select class="req-role-select">
+          ${ROLE_OPTIONS.map(rl => `<option value="${escapeHtml(rl)}" ${rl === r.role ? 'selected' : ''}>${escapeHtml(rl)}</option>`).join('')}
+        </select>
+        <input type="number" class="req-role-count" min="0" step="1" value="${r.count}" style="width:70px">
+        <label>時間帯 <input type="time" class="req-role-start" value="${hoursToTimeStr(start)}"></label>
+        〜
+        <input type="time" class="req-role-end" value="${hoursToTimeStr(end)}">
+        <button type="button" class="secondary req-role-remove">削除</button>
+      </div>`;
+    }).join('');
+
+    wrap.querySelectorAll('[data-idx]').forEach(row => {
+      const idx = Number(row.dataset.idx);
+      row.querySelector('.req-role-select').addEventListener('change', (e) => {
+        DATA.settings.requiredRoles[idx].role = e.target.value;
+        saveData(DATA);
+      });
+      row.querySelector('.req-role-count').addEventListener('change', (e) => {
+        DATA.settings.requiredRoles[idx].count = Number(e.target.value) || 0;
+        saveData(DATA);
+      });
+      row.querySelector('.req-role-start').addEventListener('change', (e) => {
+        DATA.settings.requiredRoles[idx].start = timeStrToHours(e.target.value);
+        saveData(DATA);
+      });
+      row.querySelector('.req-role-end').addEventListener('change', (e) => {
+        DATA.settings.requiredRoles[idx].end = timeStrToHours(e.target.value);
+        saveData(DATA);
+      });
+      row.querySelector('.req-role-remove').addEventListener('click', () => {
+        DATA.settings.requiredRoles.splice(idx, 1);
+        saveData(DATA);
+        renderRequiredRolesList();
+      });
+    });
+  }
+
   function bindCoverageForm() {
+    document.getElementById('add-required-role').addEventListener('click', () => {
+      DATA.settings.requiredRoles = DATA.settings.requiredRoles || [];
+      DATA.settings.requiredRoles.push({
+        role: ROLE_OPTIONS[0],
+        count: 1,
+        start: DATA.settings.openTime,
+        end: DATA.settings.closeTime
+      });
+      saveData(DATA);
+      renderRequiredRolesList();
+    });
     document.getElementById('add-headcount-rule').addEventListener('click', () => {
       DATA.settings.headcountRules = DATA.settings.headcountRules || [];
       DATA.settings.headcountRules.push({
@@ -638,10 +704,21 @@
         }
       });
     });
-    return { headNeed, desiredExtra, skillNeed };
+    const jobRoleNeed = new Map(slots.map(sl => [sl.start, {}]));
+    (settings.requiredRoles || []).filter(r => r.role).forEach(r => {
+      const rStart = r.start != null ? r.start : settings.openTime;
+      const rEnd = r.end != null ? r.end : settings.closeTime;
+      slots.forEach(sl => {
+        if (sl.start >= rStart - 1e-9 && sl.end <= rEnd + 1e-9) {
+          const rn = jobRoleNeed.get(sl.start);
+          rn[r.role] = (rn[r.role] || 0) + r.count;
+        }
+      });
+    });
+    return { headNeed, desiredExtra, skillNeed, jobRoleNeed };
   }
 
-  function applyAssignmentToNeed(assign, slots, headNeed, skillNeed, staff) {
+  function applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staff) {
     for (const sl of slots) {
       if (sl.start >= assign.start - 1e-9 && sl.end <= assign.end + 1e-9) {
         if (!isNewbie(staff)) headNeed.set(sl.start, headNeed.get(sl.start) - 1);
@@ -649,6 +726,9 @@
           const sk = skillNeed.get(sl.start);
           if (sk[assign.role] !== undefined) sk[assign.role] = Math.max(0, sk[assign.role] - 1);
         }
+        const jobRole = staff.jobRole || 'アルバイト';
+        const rn = jobRoleNeed.get(sl.start);
+        if (rn[jobRole] !== undefined) rn[jobRole] = Math.max(0, rn[jobRole] - 1);
       }
     }
   }
@@ -660,7 +740,8 @@
     for (let i = 1; i < shortages.length; i++) {
       const s = shortages[i];
       const sameSig = s.headShort === cur.headShort &&
-        JSON.stringify(s.missingSkills) === JSON.stringify(cur.missingSkills);
+        JSON.stringify(s.missingSkills) === JSON.stringify(cur.missingSkills) &&
+        JSON.stringify(s.missingRoles) === JSON.stringify(cur.missingRoles);
       if (sameSig && Math.abs(s.start - cur.end) < 1e-9) {
         cur.end = s.end;
       } else {
@@ -672,14 +753,16 @@
     return merged;
   }
 
-  function deriveShortages(slots, headNeed, skillNeed) {
+  function deriveShortages(slots, headNeed, skillNeed, jobRoleNeed) {
     const shortages = [];
     for (const sl of slots) {
       const hn = headNeed.get(sl.start);
       const sk = skillNeed.get(sl.start);
+      const rn = jobRoleNeed.get(sl.start);
       const missingSkills = Object.entries(sk).filter(([, v]) => v > 0).map(([k, v]) => `${k}×${v}`);
-      if (hn > 0 || missingSkills.length > 0) {
-        shortages.push({ start: sl.start, end: sl.end, headShort: Math.max(0, hn), missingSkills });
+      const missingRoles = Object.entries(rn).filter(([, v]) => v > 0).map(([k, v]) => `${k}×${v}`);
+      if (hn > 0 || missingSkills.length > 0 || missingRoles.length > 0) {
+        shortages.push({ start: sl.start, end: sl.end, headShort: Math.max(0, hn), missingSkills, missingRoles });
       }
     }
     return mergeConsecutive(shortages);
@@ -720,12 +803,16 @@
 
   // 一人のスタッフは1回のシフトで1つの役割(スキル)しか担当できない前提で、
   // そのスタッフが担当するのに最も貢献度の高い役割を1つだけ選んでスコア化する。
-  function bestRoleAndScore(cand, slots, headNeed, skillNeed, staffMap) {
+  function bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap) {
     const staff = staffMap[cand.staffId];
     let headScore = 0;
+    let jobRoleScore = 0;
+    const jobRole = staff.jobRole || 'アルバイト';
     for (const sl of slots) {
       if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
         if (!isNewbie(staff) && headNeed.get(sl.start) > 0) headScore += 1;
+        const rn = jobRoleNeed.get(sl.start);
+        if (rn[jobRole] > 0) jobRoleScore += 1;
       }
     }
     let bestRole = null;
@@ -740,12 +827,12 @@
       }
       if (s > bestSkillScore) { bestSkillScore = s; bestRole = skName; }
     });
-    return { score: headScore + bestSkillScore * 2, role: bestRole };
+    return { score: headScore + bestSkillScore * 2 + jobRoleScore * 2, role: bestRole };
   }
 
   function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours, dayType) {
     const slots = buildSlots(settings.openTime, settings.closeTime, 0.5);
-    const { headNeed, desiredExtra, skillNeed } = buildNeedMaps(settings, slots, dayType);
+    const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(settings, slots, dayType);
     let remaining = dayAvail.slice();
     const picked = [];
 
@@ -754,6 +841,7 @@
       for (const sl of slots) {
         unmet += Math.max(0, headNeed.get(sl.start));
         Object.values(skillNeed.get(sl.start)).forEach(v => { unmet += Math.max(0, v); });
+        Object.values(jobRoleNeed.get(sl.start)).forEach(v => { unmet += Math.max(0, v); });
       }
       return unmet;
     }
@@ -761,7 +849,7 @@
     while (totalUnmet() > 0 && remaining.length > 0) {
       let best = null, bestScore = -Infinity, bestRole = null;
       for (const cand of remaining) {
-        const { score: rawScore, role } = bestRoleAndScore(cand, slots, headNeed, skillNeed, staffMap);
+        const { score: rawScore, role } = bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
         let score = rawScore;
         if (score <= 0) continue;
         if (hasConflict(cand, picked, staffMap)) score -= 1000;
@@ -773,10 +861,10 @@
       const assign = { staffId: best.staffId, start: best.start, end: best.end, role: bestRole };
       picked.push(assign);
       remaining = remaining.filter(c => c !== best);
-      applyAssignmentToNeed(assign, slots, headNeed, skillNeed, staffMap[best.staffId]);
+      applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staffMap[best.staffId]);
     }
 
-    const shortages = deriveShortages(slots, headNeed, skillNeed);
+    const shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
 
     // 最低人数(必須)を満たした後、余裕があれば「目標人数」まで追加で配置を試みる。
     // 満たせなくても不足警告にはしない(あくまで努力目標)。
@@ -801,7 +889,7 @@
         if (score > bestScore) { bestScore = score; best = cand; }
       }
       if (!best) break;
-      const { role } = bestRoleAndScore(best, slots, headNeed, skillNeed, staffMap);
+      const { role } = bestRoleAndScore(best, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
       const assign = { staffId: best.staffId, start: best.start, end: best.end, role, desiredOnly: true };
       picked.push(assign);
       remaining = remaining.filter(c => c !== best);
@@ -816,6 +904,13 @@
             const sk = skillNeed.get(sl.start);
             if (sk[role] !== undefined) sk[role] = Math.max(0, sk[role] - 1);
           }
+        }
+      }
+      const bestJobRole = (staffMap[best.staffId].jobRole) || 'アルバイト';
+      for (const sl of slots) {
+        if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
+          const rn = jobRoleNeed.get(sl.start);
+          if (rn[bestJobRole] !== undefined) rn[bestJobRole] = Math.max(0, rn[bestJobRole] - 1);
         }
       }
     }
@@ -863,16 +958,16 @@
     DATA.staff.forEach(s => { staffMap[s.id] = s; });
     const slots = buildSlots(DATA.settings.openTime, DATA.settings.closeTime, 0.5);
     const dayType = getDayType(date, DATA.settings);
-    const { headNeed, desiredExtra, skillNeed } = buildNeedMaps(DATA.settings, slots, dayType);
+    const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(DATA.settings, slots, dayType);
     DATA.results[ym][date].assignments.forEach(a => {
-      applyAssignmentToNeed(a, slots, headNeed, skillNeed, staffMap[a.staffId] || { skills: [] });
+      applyAssignmentToNeed(a, slots, headNeed, skillNeed, jobRoleNeed, staffMap[a.staffId] || { skills: [], jobRole: 'アルバイト' });
       for (const sl of slots) {
         if (sl.start >= a.start - 1e-9 && sl.end <= a.end + 1e-9) {
           desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
         }
       }
     });
-    DATA.results[ym][date].shortages = deriveShortages(slots, headNeed, skillNeed);
+    DATA.results[ym][date].shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
     DATA.results[ym][date].desiredShortages = deriveDesiredShortages(slots, desiredExtra);
   }
 
@@ -912,6 +1007,7 @@
         const parts = [];
         if (sh.headShort > 0) parts.push(`人数不足(${sh.headShort}人)`);
         if (sh.missingSkills.length) parts.push('不足スキル: ' + sh.missingSkills.join('、'));
+        if (sh.missingRoles && sh.missingRoles.length) parts.push('不足役職: ' + sh.missingRoles.join('、'));
         html += `<div class="shortage-warning">⚠ ${hoursToTimeStr(sh.start)}-${hoursToTimeStr(sh.end)} ${parts.join(' / ')}</div>`;
       });
       (dayResult.desiredShortages || []).forEach(ds => {
