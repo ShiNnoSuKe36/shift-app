@@ -16,7 +16,10 @@
     p2: { start: 14.5, end: 20.5 },
     p3: { start: 17, end: 20.5 },
     p4: { start: 9, end: 17 },
-    p5: { start: 11.5, end: 20.5 }
+    p5: { start: 11.5, end: 20.5 },
+    p6: { start: 8, end: 14.5 },
+    p7: { start: 8, end: 20.5 },
+    p8: { start: 8, end: 17 }
   };
 
   function defaultData() {
