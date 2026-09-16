@@ -13,7 +13,9 @@
   const PATTERNS = {
     p1: { start: 9, end: 14.5 },
     p2: { start: 14.5, end: 20.5 },
-    p3: { start: 17, end: 20.5 }
+    p3: { start: 17, end: 20.5 },
+    p4: { start: 9, end: 17 },
+    p5: { start: 11.5, end: 20.5 }
   };
 
   function defaultData() {
