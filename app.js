@@ -6,6 +6,8 @@
   const SKILL_OPTIONS = ['新人', '焼き', 'フライヤー', 'お弁当', '冷凍もの'];
   const COVERAGE_SKILLS = SKILL_OPTIONS.filter(s => s !== '新人');
   const ROLE_OPTIONS = ['社員', 'パート', 'アルバイト'];
+  // 「午前・午後をまたぐ通し勤務ができない」スタッフの分割境界(午前/午後パターンの境目に合わせる)
+  const AM_PM_SPLIT = 14.5;
   // 同時にこなせる(1人で両方カウントしてよい)スキルの組み合わせ
   const LINKED_SKILL_GROUPS = [['フライヤー', '冷凍もの']];
 
@@ -278,6 +280,7 @@
         <td>${escapeHtml(s.jobRole || 'アルバイト')}</td>
         <td>${(s.hourlyWage || 0).toLocaleString()}円</td>
         <td>${skillsText}</td>
+        <td>${s.noContinuousShift ? '午前/午後のみ' : '通し可'}</td>
         <td>${escapeHtml(avoidNames)}</td>
         <td>${escapeHtml(defaultText)}</td>
         <td>
@@ -315,6 +318,7 @@
     document.getElementById('staff-name').value = s.name;
     document.getElementById('staff-wage').value = s.hourlyWage || 0;
     document.getElementById('staff-role').value = s.jobRole || 'アルバイト';
+    document.getElementById('staff-no-continuous').checked = !!s.noContinuousShift;
     document.querySelectorAll('input[name="staff-skill"]').forEach(cb => {
       cb.checked = (s.skills || []).includes(cb.value);
     });
@@ -346,6 +350,7 @@
       if (!name) return;
       const hourlyWage = Number(document.getElementById('staff-wage').value) || 0;
       const jobRole = document.getElementById('staff-role').value || 'アルバイト';
+      const noContinuousShift = document.getElementById('staff-no-continuous').checked;
       const skills = Array.from(
         document.querySelectorAll('input[name="staff-skill"]:checked')
       ).map(cb => cb.value);
@@ -375,6 +380,7 @@
           s.name = name;
           s.hourlyWage = hourlyWage;
           s.jobRole = jobRole;
+          s.noContinuousShift = noContinuousShift;
           s.skills = skills;
           s.avoidWith = [...avoidWith];
           s.defaultWeekday = defaultWeekday;
@@ -383,7 +389,7 @@
         cancelStaffEdit();
       } else {
         const id = 's' + Date.now() + Math.floor(Math.random() * 1000);
-        DATA.staff.push({ id, name, hourlyWage, jobRole, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend });
+        DATA.staff.push({ id, name, hourlyWage, jobRole, noContinuousShift, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend });
         avoidWith.forEach(otherId => {
           const other = DATA.staff.find(s => s.id === otherId);
           if (other) {
@@ -884,7 +890,7 @@
       if (!best) break;
       const assign = { staffId: best.staffId, start: best.start, end: best.end, roles: bestRoles || [] };
       picked.push(assign);
-      remaining = remaining.filter(c => c !== best);
+      remaining = remaining.filter(c => c.staffId !== best.staffId);
       applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staffMap[best.staffId]);
     }
 
@@ -916,7 +922,7 @@
       const { roles } = bestRoleAndScore(best, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
       const assign = { staffId: best.staffId, start: best.start, end: best.end, roles: roles || [], desiredOnly: true };
       picked.push(assign);
-      remaining = remaining.filter(c => c !== best);
+      remaining = remaining.filter(c => c.staffId !== best.staffId);
       for (const sl of slots) {
         if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
           desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
@@ -963,7 +969,13 @@
         if (rec.type === 'off' || rec.type === 'invalid') return;
         const start = Math.max(rec.start, DATA.settings.openTime);
         const end = Math.min(rec.end, DATA.settings.closeTime);
-        if (start < end) dayAvail.push({ staffId: s.id, start, end });
+        if (!(start < end)) return;
+        if (s.noContinuousShift && start < AM_PM_SPLIT && end > AM_PM_SPLIT) {
+          dayAvail.push({ staffId: s.id, start, end: AM_PM_SPLIT });
+          dayAvail.push({ staffId: s.id, start: AM_PM_SPLIT, end });
+        } else {
+          dayAvail.push({ staffId: s.id, start, end });
+        }
       });
       const dayType = getDayType(d.dateStr, DATA.settings);
       const dayResult = solveDayCoverage(dayAvail, DATA.settings, staffMap, cumulativeHours, dayType);
