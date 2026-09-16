@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シフト作成アプリ</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="app-header">
+  <h1>シフト作成アプリ</h1>
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="staff">スタッフ管理</button>
+    <button class="tab-btn" data-tab="availability">シフト希望入力</button>
+    <button class="tab-btn" data-tab="coverage">必要人数設定</button>
+    <button class="tab-btn" data-tab="generate">シフト自動作成</button>
+  </nav>
+  <div class="header-actions">
+    <label>共有データベースURL
+      <input type="text" id="backend-url-input" placeholder="https://script.google.com/macros/s/.../exec">
+    </label>
+    <button type="button" id="backend-connect-btn" class="secondary">接続して同期</button>
+    <button type="button" id="backend-refresh-btn" class="secondary">最新の状態を取得</button>
+    <span id="backend-status" class="help-text"></span>
+  </div>
+  <div class="header-actions">
+    <button type="button" id="export-data-btn" class="secondary">データをエクスポート</button>
+    <button type="button" id="import-data-btn" class="secondary">データをインポート</button>
+    <input type="file" id="import-data-file" accept="application/json" hidden>
+    <span class="help-text">共有データベースURLを設定しない場合は、この端末のブラウザ内にのみ保存されます(エクスポート/インポートで手動移行可能)</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- スタッフ管理 -->
+  <section id="tab-staff" class="tab-panel active">
+    <h2>スタッフ管理</h2>
+    <form id="staff-form" class="card">
+      <div class="form-row">
+        <label>名前 <input type="text" id="staff-name" required></label>
+        <label>時給(円) <input type="number" id="staff-wage" min="0" step="1" value="1000" required></label>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">できる作業(未チェックの場合は接客)</label>
+        <div class="checkbox-list">
+          <label><input type="checkbox" name="staff-skill" value="新人"> 新人</label>
+          <label><input type="checkbox" name="staff-skill" value="焼き"> 焼き</label>
+          <label><input type="checkbox" name="staff-skill" value="フライヤー"> フライヤー</label>
+          <label><input type="checkbox" name="staff-skill" value="お弁当"> お弁当</label>
+          <label><input type="checkbox" name="staff-skill" value="冷凍もの"> 冷凍もの</label>
+        </div>
+        <p class="help-text">「新人」にチェックすると、シフト自動作成の「常時必要な最低人数」の人数にはカウントされません</p>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">組ませたくないスタッフ</label>
+        <div id="staff-avoid-list" class="checkbox-list"></div>
+      </div>
+      <div class="form-row">
+        <label>平日の基本シフト
+          <select id="staff-default-weekday">
+            <option value="">未設定</option>
+            <option value="p1">9:00〜14:30</option>
+            <option value="p2">14:30〜20:30</option>
+            <option value="p3">17:00〜20:30</option>
+          </select>
+        </label>
+        <label>休日の基本シフト
+          <select id="staff-default-weekend">
+            <option value="">未設定</option>
+            <option value="p1">9:00〜14:30</option>
+            <option value="p2">14:30〜20:30</option>
+            <option value="p3">17:00〜20:30</option>
+          </select>
+        </label>
+      </div>
+      <p class="help-text">基本シフトを設定すると、「シフト希望入力」で未記入の日はこの時間帯が自動的に希望として使われます(個別に記入すればその内容が優先されます)</p>
+      <div class="form-row">
+        <button type="submit" id="staff-submit-btn">スタッフを追加</button>
+        <button type="button" id="staff-cancel-btn" class="secondary" hidden>編集をキャンセル</button>
+      </div>
+    </form>
+    <table class="data-table">
+      <thead><tr><th>名前</th><th>時給</th><th>できる作業</th><th>組ませたくない相手</th><th>基本シフト(平日/休日)</th><th></th></tr></thead>
+      <tbody id="staff-table-body"></tbody>
+    </table>
+  </section>
+
+  <!-- シフト希望入力 -->
+  <section id="tab-availability" class="tab-panel">
+    <h2>シフト希望入力</h2>
+    <p class="help-text">
+      各セルに記入:「空白」=基本シフト通り(未設定なら終日OK)、「/」=休み希望、「14.5-18」=14:30〜18:00、「14.5-」または「14.5~」=14:30〜閉店まで、「-18」=開店〜18:00
+    </p>
+    <div class="form-row">
+      <label>対象月 <input type="month" id="availability-month"></label>
+    </div>
+    <div id="availability-grid-wrap"></div>
+  </section>
+
+  <!-- 必要人数設定 -->
+  <section id="tab-coverage" class="tab-panel">
+    <h2>必要人数・スキル設定</h2>
+    <form id="coverage-form" class="card">
+      <div class="form-row">
+        <label>開店時刻 <input type="time" id="open-time" required></label>
+        <label>閉店時刻 <input type="time" id="close-time" required></label>
+      </div>
+      <div class="form-row">
+        <label>常時必要な最低人数 <input type="number" id="min-headcount" min="0" step="1" required></label>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">必須スキルと必要人数</label>
+        <div id="required-skills-list"></div>
+        <button type="button" id="add-required-skill">スキル条件を追加</button>
+      </div>
+      <button type="submit">設定を保存</button>
+    </form>
+  </section>
+
+  <!-- シフト自動作成 -->
+  <section id="tab-generate" class="tab-panel">
+    <h2>シフト自動作成</h2>
+    <div class="form-row">
+      <label>対象月 <input type="month" id="generate-month"></label>
+      <button type="button" id="generate-btn">自動生成する</button>
+      <button type="button" id="export-csv-btn">CSV出力</button>
+      <button type="button" id="print-btn">印刷</button>
+    </div>
+    <div id="generate-result-wrap"></div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
