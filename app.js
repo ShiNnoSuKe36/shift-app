@@ -6,6 +6,26 @@
   const SKILL_OPTIONS = ['新人', '焼き', 'フライヤー', 'お弁当', '冷凍もの'];
   const COVERAGE_SKILLS = SKILL_OPTIONS.filter(s => s !== '新人');
   const ROLE_OPTIONS = ['社員', 'パート', 'アルバイト'];
+  // 同時にこなせる(1人で両方カウントしてよい)スキルの組み合わせ
+  const LINKED_SKILL_GROUPS = [['フライヤー', '冷凍もの']];
+
+  // スタッフの持つスキルから、シフト中に同時に担当できる「役割の組み合わせ候補」を作る。
+  // 例: フライヤーと冷凍ものを両方持っていれば、その2つはセットで1つの候補になる。
+  function getRoleGroupCandidates(staffSkills) {
+    const skillSet = new Set(staffSkills || []);
+    const used = new Set();
+    const options = [];
+    LINKED_SKILL_GROUPS.forEach(group => {
+      if (group.every(sk => skillSet.has(sk))) {
+        options.push(group.slice());
+        group.forEach(sk => used.add(sk));
+      }
+    });
+    (staffSkills || []).forEach(sk => {
+      if (!used.has(sk)) options.push([sk]);
+    });
+    return options;
+  }
 
   function isNewbie(staff) {
     return !!(staff && (staff.skills || []).includes('新人'));
@@ -725,10 +745,10 @@
     for (const sl of slots) {
       if (sl.start >= assign.start - 1e-9 && sl.end <= assign.end + 1e-9) {
         if (!isNewbie(staff)) headNeed.set(sl.start, headNeed.get(sl.start) - 1);
-        if (assign.role) {
+        (assign.roles || []).forEach(roleName => {
           const sk = skillNeed.get(sl.start);
-          if (sk[assign.role] !== undefined) sk[assign.role] = Math.max(0, sk[assign.role] - 1);
-        }
+          if (sk[roleName] !== undefined) sk[roleName] = Math.max(0, sk[roleName] - 1);
+        });
         const jobRole = staff.jobRole || 'アルバイト';
         const rn = jobRoleNeed.get(sl.start);
         if (rn[jobRole] !== undefined) rn[jobRole] = Math.max(0, rn[jobRole] - 1);
@@ -804,8 +824,9 @@
     return false;
   }
 
-  // 一人のスタッフは1回のシフトで1つの役割(スキル)しか担当できない前提で、
-  // そのスタッフが担当するのに最も貢献度の高い役割を1つだけ選んでスコア化する。
+  // 一人のスタッフは1回のシフトで基本1つの役割(スキル)しか担当できない前提だが、
+  // LINKED_SKILL_GROUPSで組にしたスキル(例: フライヤーと冷凍もの)は同時に1人でカウントしてよい。
+  // その前提で、そのスタッフが担当するのに最も貢献度の高い役割(の組)を1つだけ選んでスコア化する。
   function bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap) {
     const staff = staffMap[cand.staffId];
     let headScore = 0;
@@ -818,19 +839,19 @@
         if (rn[jobRole] > 0) jobRoleScore += 1;
       }
     }
-    let bestRole = null;
+    let bestRoles = null;
     let bestSkillScore = 0;
-    (staff.skills || []).forEach(skName => {
+    getRoleGroupCandidates(staff.skills).forEach(roleGroup => {
       let s = 0;
       for (const sl of slots) {
         if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
           const sk = skillNeed.get(sl.start);
-          if (sk[skName] > 0) s += 1;
+          roleGroup.forEach(skName => { if (sk[skName] > 0) s += 1; });
         }
       }
-      if (s > bestSkillScore) { bestSkillScore = s; bestRole = skName; }
+      if (s > bestSkillScore) { bestSkillScore = s; bestRoles = roleGroup; }
     });
-    return { score: headScore + bestSkillScore * 2 + jobRoleScore * 2, role: bestRole };
+    return { score: headScore + bestSkillScore * 2 + jobRoleScore * 2, roles: bestRoles };
   }
 
   function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours, dayType) {
@@ -850,18 +871,18 @@
     }
 
     while (totalUnmet() > 0 && remaining.length > 0) {
-      let best = null, bestScore = -Infinity, bestRole = null;
+      let best = null, bestScore = -Infinity, bestRoles = null;
       for (const cand of remaining) {
-        const { score: rawScore, role } = bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
+        const { score: rawScore, roles } = bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
         let score = rawScore;
         if (score <= 0) continue;
         if (hasConflict(cand, picked, staffMap)) score -= 1000;
         score -= (cumulativeHours[cand.staffId] || 0) * 0.01;
         score -= (cand.end - cand.start) * 0.001;
-        if (score > bestScore) { bestScore = score; best = cand; bestRole = role; }
+        if (score > bestScore) { bestScore = score; best = cand; bestRoles = roles; }
       }
       if (!best) break;
-      const assign = { staffId: best.staffId, start: best.start, end: best.end, role: bestRole };
+      const assign = { staffId: best.staffId, start: best.start, end: best.end, roles: bestRoles || [] };
       picked.push(assign);
       remaining = remaining.filter(c => c !== best);
       applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staffMap[best.staffId]);
@@ -892,8 +913,8 @@
         if (score > bestScore) { bestScore = score; best = cand; }
       }
       if (!best) break;
-      const { role } = bestRoleAndScore(best, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
-      const assign = { staffId: best.staffId, start: best.start, end: best.end, role, desiredOnly: true };
+      const { roles } = bestRoleAndScore(best, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
+      const assign = { staffId: best.staffId, start: best.start, end: best.end, roles: roles || [], desiredOnly: true };
       picked.push(assign);
       remaining = remaining.filter(c => c !== best);
       for (const sl of slots) {
@@ -901,14 +922,14 @@
           desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
         }
       }
-      if (role) {
+      (roles || []).forEach(roleName => {
         for (const sl of slots) {
           if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
             const sk = skillNeed.get(sl.start);
-            if (sk[role] !== undefined) sk[role] = Math.max(0, sk[role] - 1);
+            if (sk[roleName] !== undefined) sk[roleName] = Math.max(0, sk[roleName] - 1);
           }
         }
-      }
+      });
       const bestJobRole = (staffMap[best.staffId].jobRole) || 'アルバイト';
       for (const sl of slots) {
         if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
@@ -1001,7 +1022,7 @@
         const staff = staffMap[a.staffId];
         totalHours[a.staffId] += (a.end - a.start);
         const newbieTag = isNewbie(staff) ? '(新人)' : '';
-        const roleTag = a.role ? `[${escapeHtml(a.role)}]` : '';
+        const roleTag = (a.roles && a.roles.length) ? `[${escapeHtml(a.roles.join('・'))}]` : '';
         html += `<span class="assign-chip">${escapeHtml(staff ? staff.name : '?')}${newbieTag} ${hoursToTimeStr(a.start)}-${hoursToTimeStr(a.end)}${roleTag}
           <button type="button" class="remove-assign-btn" data-date="${d.dateStr}" data-idx="${idx}">×</button></span>`;
       });
@@ -1019,7 +1040,9 @@
       const candidates = DATA.staff.filter(s => !assignedIds.has(s.id));
       if (candidates.length > 0) {
         const roleOptionsFor = (s) => `<option value="">役割なし(接客)</option>` +
-          (s.skills || []).map(sk => `<option value="${escapeHtml(sk)}">${escapeHtml(sk)}</option>`).join('');
+          getRoleGroupCandidates(s.skills).map(group =>
+            `<option value="${escapeHtml(group.join(','))}">${escapeHtml(group.join('・'))}</option>`
+          ).join('');
         html += `<div class="add-assign-row">
           <select class="add-staff-select">
             ${candidates.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}
@@ -1063,7 +1086,9 @@
       staffSelect.addEventListener('change', () => {
         const s = staffMap[staffSelect.value];
         roleSelect.innerHTML = '<option value="">役割なし(接客)</option>' +
-          (s && s.skills || []).map(sk => `<option value="${escapeHtml(sk)}">${escapeHtml(sk)}</option>`).join('');
+          getRoleGroupCandidates(s && s.skills).map(group =>
+            `<option value="${escapeHtml(group.join(','))}">${escapeHtml(group.join('・'))}</option>`
+          ).join('');
       });
     });
     wrap.querySelectorAll('.add-assign-btn').forEach(btn => {
@@ -1071,11 +1096,12 @@
         const date = btn.dataset.date;
         const row = btn.closest('.add-assign-row');
         const staffId = row.querySelector('.add-staff-select').value;
-        const role = row.querySelector('.add-role-select').value || null;
+        const roleValue = row.querySelector('.add-role-select').value;
+        const roles = roleValue ? roleValue.split(',') : [];
         const start = timeStrToHours(row.querySelector('.add-start-time').value);
         const end = timeStrToHours(row.querySelector('.add-end-time').value);
         if (!(start < end)) { alert('開始時刻は終了時刻より前にしてください'); return; }
-        DATA.results[ym][date].assignments.push({ staffId, start, end, role });
+        DATA.results[ym][date].assignments.push({ staffId, start, end, roles });
         recomputeShortages(ym, date);
         saveData(DATA);
         renderGenerateResult();
@@ -1102,7 +1128,7 @@
         rows.push([d.dateStr, d.weekday, '', '', '', '']);
       } else {
         dayResult.assignments.forEach(a => {
-          rows.push([d.dateStr, d.weekday, staffMap[a.staffId] ? staffMap[a.staffId].name : '', hoursToTimeStr(a.start), hoursToTimeStr(a.end), a.role || '']);
+          rows.push([d.dateStr, d.weekday, staffMap[a.staffId] ? staffMap[a.staffId].name : '', hoursToTimeStr(a.start), hoursToTimeStr(a.end), (a.roles || []).join('・')]);
         });
       }
     });
