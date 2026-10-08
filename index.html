@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>シフト作成アプリ</title>
-<link rel="stylesheet" href="style.css?v=17">
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
 <header class="app-header">
@@ -58,7 +58,7 @@
           <label><input type="checkbox" name="staff-skill" value="お弁当"> お弁当</label>
           <label><input type="checkbox" name="staff-skill" value="冷凍もの"> 冷凍もの</label>
         </div>
-        <p class="help-text">「新人」にチェックすると、シフト自動作成の最低人数・目標人数にはカウントされません。新人は、ほかのスタッフで最低人数を満たしている時間帯に、1人ずつ研修として配置されます</p>
+        <p class="help-text">社員はチェックしなくても「焼き」ができるものとして扱います。「新人」にチェックすると、シフト自動作成の最低人数・目標人数にはカウントされません。新人は、ほかのスタッフで最低人数を満たしている時間帯に、1人ずつ研修として配置されます</p>
       </div>
       <div class="form-row">
         <label class="avoid-label">組ませたくないスタッフ</label>
@@ -134,9 +134,8 @@
         <button type="button" id="add-holiday">この日を追加</button>
       </div>
       <div class="form-row">
-        <label class="avoid-label">必須スキルと必要人数</label>
+        <label class="avoid-label">必須スキルと必要人数(固定)</label>
         <div id="required-skills-list"></div>
-        <button type="button" id="add-required-skill">スキル条件を追加</button>
       </div>
       <div class="form-row">
         <label class="avoid-label">役職ごとの必要人数(例: 社員が常時1人必要)</label>
@@ -162,6 +161,6 @@
 
 </main>
 
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

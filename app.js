@@ -29,6 +29,26 @@
     return options;
   }
 
+  // 必須スキル(システムで固定。画面からは変更できない)
+  //   8:00〜9:00 の焼き1人は、毎日8:00出勤の社員(社員は必ず焼きができる)が担当する。
+  //   フライヤーと冷凍ものは LINKED_SKILL_GROUPS により同じ人が兼ねられる。
+  const REQUIRED_SKILLS = [
+    { skill: '焼き', count: 2, start: 9, end: 20.5 },
+    { skill: 'フライヤー', count: 1, start: 9, end: 14.5 },
+    { skill: 'お弁当', count: 1, start: 9, end: 14.5 },
+    { skill: '冷凍もの', count: 1, start: 9, end: 20.5 }
+  ];
+  const EMPLOYEE_SKILL = '焼き';
+
+  // 実際に担当できるスキル(社員は登録がなくても必ず焼きができる)
+  function staffSkills(staff) {
+    const skills = (staff && staff.skills) || [];
+    if (staff && (staff.jobRole || 'アルバイト') === '社員' && !skills.includes(EMPLOYEE_SKILL)) {
+      return [EMPLOYEE_SKILL, ...skills];
+    }
+    return skills;
+  }
+
   function isNewbie(staff) {
     return !!(staff && (staff.skills || []).includes('新人'));
   }
@@ -359,7 +379,7 @@
       const avoidNames = (s.avoidWith || [])
         .map(id => { const t = DATA.staff.find(x => x.id === id); return t ? t.name : null; })
         .filter(Boolean).join('、');
-      const skillsText = (s.skills || []).length ? (s.skills || []).map(escapeHtml).join('、') : '接客';
+      const skillsText = staffSkills(s).length ? staffSkills(s).map(escapeHtml).join('、') : '接客';
       const defaultText = patternLabel(s.defaultWeekday) + ' / ' + patternLabel(s.defaultWeekend);
       return `<tr>
         <td>${escapeHtml(s.name)}</td>
@@ -569,10 +589,6 @@
 
   // ---------- coverage tab ----------
 
-  function getAllSkills() {
-    return COVERAGE_SKILLS;
-  }
-
   function renderCoverageForm() {
     document.getElementById('open-time').value = hoursToTimeStr(DATA.settings.openTime);
     document.getElementById('close-time').value = hoursToTimeStr(DATA.settings.closeTime);
@@ -656,54 +672,12 @@
   }
 
   function renderRequiredSkillsList() {
-    const wrap = document.getElementById('required-skills-list');
-    const allSkills = getAllSkills();
-    if (DATA.settings.requiredSkills.length === 0) {
-      wrap.innerHTML = '<p class="help-text">スキル条件はありません</p>';
-      return;
-    }
-    wrap.innerHTML = DATA.settings.requiredSkills.map((r, i) => {
-      const start = r.start != null ? r.start : DATA.settings.openTime;
-      const end = r.end != null ? r.end : DATA.settings.closeTime;
-      return `
-      <div class="form-row" data-idx="${i}">
-        <select class="req-skill-select">
-          ${allSkills.length === 0
-            ? '<option value="">(スタッフにスキルを登録してください)</option>'
-            : allSkills.map(sk => `<option value="${escapeHtml(sk)}" ${sk === r.skill ? 'selected' : ''}>${escapeHtml(sk)}</option>`).join('')}
-        </select>
-        <input type="number" class="req-skill-count" min="0" step="1" value="${r.count}" style="width:70px">
-        <label>時間帯 <input type="time" class="req-skill-start" value="${hoursToTimeStr(start)}"></label>
-        〜
-        <input type="time" class="req-skill-end" value="${hoursToTimeStr(end)}">
-        <button type="button" class="secondary req-skill-remove">削除</button>
-      </div>`;
-    }).join('');
-
-    wrap.querySelectorAll('[data-idx]').forEach(row => {
-      const idx = Number(row.dataset.idx);
-      row.querySelector('.req-skill-select').addEventListener('change', (e) => {
-        DATA.settings.requiredSkills[idx].skill = e.target.value;
-        saveData(DATA);
-      });
-      row.querySelector('.req-skill-count').addEventListener('change', (e) => {
-        DATA.settings.requiredSkills[idx].count = Number(e.target.value) || 0;
-        saveData(DATA);
-      });
-      row.querySelector('.req-skill-start').addEventListener('change', (e) => {
-        DATA.settings.requiredSkills[idx].start = timeStrToHours(e.target.value);
-        saveData(DATA);
-      });
-      row.querySelector('.req-skill-end').addEventListener('change', (e) => {
-        DATA.settings.requiredSkills[idx].end = timeStrToHours(e.target.value);
-        saveData(DATA);
-      });
-      row.querySelector('.req-skill-remove').addEventListener('click', () => {
-        DATA.settings.requiredSkills.splice(idx, 1);
-        saveData(DATA);
-        renderRequiredSkillsList();
-      });
-    });
+    const rows = [`<li>${hoursToTimeStr(EMPLOYEE_EARLY_START)}〜${hoursToTimeStr(DATA.settings.openTime)} 焼き 1人(8:00出勤の社員が担当)</li>`]
+      .concat(REQUIRED_SKILLS.map(r =>
+        `<li>${hoursToTimeStr(r.start)}〜${hoursToTimeStr(r.end)} ${escapeHtml(r.skill)} ${r.count}人${r.skill === '焼き' ? '(8:00出勤の社員を含む)' : ''}</li>`));
+    document.getElementById('required-skills-list').innerHTML =
+      `<ul class="fixed-skill-list">${rows.join('')}</ul>` +
+      '<p class="help-text">必須スキルはシステムで固定されています。社員は登録がなくても焼きができるものとして扱います。冷凍ものはフライヤー担当の人が兼ねられます。</p>';
   }
 
   function renderRequiredRolesList() {
@@ -789,17 +763,6 @@
       input.value = '';
       renderHolidaysList();
     });
-    document.getElementById('add-required-skill').addEventListener('click', () => {
-      const allSkills = getAllSkills();
-      DATA.settings.requiredSkills.push({
-        skill: allSkills[0] || '',
-        count: 1,
-        start: DATA.settings.openTime,
-        end: DATA.settings.closeTime
-      });
-      saveData(DATA);
-      renderRequiredSkillsList();
-    });
     document.getElementById('coverage-form').addEventListener('submit', (e) => {
       e.preventDefault();
       DATA.settings.openTime = timeStrToHours(document.getElementById('open-time').value);
@@ -834,9 +797,9 @@
       });
     });
     const skillNeed = new Map(slots.map(sl => [sl.start, {}]));
-    (settings.requiredSkills || []).filter(r => r.skill).forEach(r => {
-      const rStart = r.start != null ? r.start : settings.openTime;
-      const rEnd = r.end != null ? r.end : settings.closeTime;
+    REQUIRED_SKILLS.forEach(r => {
+      const rStart = r.start;
+      const rEnd = r.end;
       slots.forEach(sl => {
         if (sl.start >= rStart - 1e-9 && sl.end <= rEnd + 1e-9) {
           const sk = skillNeed.get(sl.start);
@@ -1000,7 +963,7 @@
     }
     let bestRoles = null;
     let bestSkillScore = 0;
-    getRoleGroupCandidates(staff.skills).forEach(roleGroup => {
+    getRoleGroupCandidates(staffSkills(staff)).forEach(roleGroup => {
       let s = 0;
       for (const sl of slots) {
         if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
@@ -1132,16 +1095,27 @@
       proportionalDeviation(load.hours, avail.hours, staffIds) * W_FAIR_HOURS;
   }
 
-  // ある日の必要人数などを配列にしたもの(評価のたびに作り直さないよう日ごとにキャッシュ)
+  // ある日の必要人数などを配列にしたもの(評価のたびに作り直さないよう日ごとにキャッシュ)。
+  // 評価は1回の生成で数万回行うので、スキル・役職の必要人数は「枠 × 種類」の平たい配列で持つ。
+  const EVAL_SKILLS = [...new Set(REQUIRED_SKILLS.map(r => r.skill))];
+  const EVAL_SKILL_INDEX = Object.fromEntries(EVAL_SKILLS.map((sk, i) => [sk, i]));
+  const EVAL_ROLE_INDEX = Object.fromEntries(ROLE_OPTIONS.map((r, i) => [r, i]));
+
   function dayTemplate(day) {
     if (day.tmpl) return day.tmpl;
     const { slots, dayType } = day;
     const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(DATA.settings, slots, dayType);
+    const n = slots.length, K = EVAL_SKILLS.length, R = ROLE_OPTIONS.length;
+    const skill = new Float64Array(n * K), role = new Float64Array(n * R);
+    slots.forEach((sl, i) => {
+      const sk = skillNeed.get(sl.start), rn = jobRoleNeed.get(sl.start);
+      EVAL_SKILLS.forEach((name, j) => { skill[i * K + j] = sk[name] || 0; });
+      ROLE_OPTIONS.forEach((name, j) => { role[i * R + j] = rn[name] || 0; });
+    });
     day.tmpl = {
-      head: slots.map(sl => headNeed.get(sl.start)),
+      head: Float64Array.from(slots.map(sl => headNeed.get(sl.start))),
       extra: slots.map(sl => desiredExtra.get(sl.start)),
-      skill: slots.map(sl => skillNeed.get(sl.start)),
-      role: slots.map(sl => jobRoleNeed.get(sl.start)),
+      skill, role,
       ranges: new Map(),
       prio: new Map()
     };
@@ -1164,20 +1138,26 @@
     return r;
   }
 
+  // スタッフごとの担当可能な役割の組(名前と、評価用の添字)をキャッシュ
   const roleGroupCache = new WeakMap();
   function roleGroupsOf(staff) {
     let g = roleGroupCache.get(staff);
-    if (!g) { g = getRoleGroupCandidates(staff.skills); roleGroupCache.set(staff, g); }
+    if (!g) {
+      g = getRoleGroupCandidates(staffSkills(staff)).map(names => ({
+        names, idx: names.map(sk => EVAL_SKILL_INDEX[sk]).filter(i => i !== undefined)
+      }));
+      roleGroupCache.set(staff, g);
+    }
     return g;
   }
 
   // ある日の配置案を評価し、役割(スキル)の割り振りもあわせて決める
   function evaluateDay(day, assigned, staffMap) {
     const tmpl = dayTemplate(day);
-    const n = day.slots.length;
+    const n = day.slots.length, K = EVAL_SKILLS.length, R = ROLE_OPTIONS.length;
     const head = tmpl.head.slice();
-    const skill = tmpl.skill.map(o => Object.assign({}, o));
-    const role = tmpl.role.map(o => Object.assign({}, o));
+    const skill = tmpl.skill.slice();
+    const role = tmpl.role.slice();
     const withRoles = assigned.map(a => ({ staffId: a.staffId, start: a.start, end: a.end, roles: [] }));
     const ranges = withRoles.map(a => slotRange(day, a));
 
@@ -1186,11 +1166,10 @@
     withRoles.forEach((a, k) => {
       const st = staffMap[a.staffId];
       const newbie = isNewbie(st);
-      const jobRole = st.jobRole || 'アルバイト';
+      const ri = EVAL_ROLE_INDEX[st.jobRole || 'アルバイト'];
       for (let i = ranges[k][0]; i < ranges[k][1]; i++) {
-        if (newbie) newbies[i] += 1; else veterans[i] += 1;
-        if (!newbie) head[i] -= 1;
-        if (role[i][jobRole] !== undefined) role[i][jobRole] = Math.max(0, role[i][jobRole] - 1);
+        if (newbie) newbies[i] += 1; else { veterans[i] += 1; head[i] -= 1; }
+        if (ri !== undefined && role[i * R + ri] > 0) role[i * R + ri] -= 1;
       }
     });
 
@@ -1203,14 +1182,12 @@
       let best = null, bestScore = 0;
       roleGroupsOf(staffMap[a.staffId]).forEach(group => {
         let s = 0;
-        for (let i = i0; i < i1; i++) group.forEach(sk => { if (skill[i][sk] > 0) s++; });
+        for (let i = i0; i < i1; i++) for (const j of group.idx) { if (skill[i * K + j] > 0) s++; }
         if (s > bestScore) { bestScore = s; best = group; }
       });
       if (!best) return;
-      a.roles = best.slice();
-      for (let i = i0; i < i1; i++) {
-        best.forEach(name => { if (skill[i][name] !== undefined) skill[i][name] = Math.max(0, skill[i][name] - 1); });
-      }
+      a.roles = best.names.slice();
+      for (let i = i0; i < i1; i++) for (const j of best.idx) { if (skill[i * K + j] > 0) skill[i * K + j] -= 1; }
     });
 
     // coverage: 不足・目標未達だけの評価(人を追加する価値があるかの判定に使う)
@@ -1218,8 +1195,8 @@
     let penalty0 = 0;
     for (let i = 0; i < n; i++) {
       coverage += Math.max(0, head[i]) * W_SHORTAGE;
-      for (const k in skill[i]) coverage += Math.max(0, skill[i][k]) * W_SHORTAGE;
-      for (const k in role[i]) coverage += Math.max(0, role[i][k]) * W_SHORTAGE;
+      for (let j = 0; j < K; j++) coverage += Math.max(0, skill[i * K + j]) * W_SHORTAGE;
+      for (let j = 0; j < R; j++) coverage += Math.max(0, role[i * R + j]) * W_SHORTAGE;
       coverage += Math.max(0, head[i] + tmpl.extra[i]) * W_DESIRED;
     }
     // 社員のうち1人は毎日8:00出勤
@@ -1477,7 +1454,7 @@
       const candidates = DATA.staff.filter(s => !assignedIds.has(s.id));
       if (candidates.length > 0) {
         const roleOptionsFor = (s) => `<option value="">役割なし(接客)</option>` +
-          getRoleGroupCandidates(s.skills).map(group =>
+          getRoleGroupCandidates(staffSkills(s)).map(group =>
             `<option value="${escapeHtml(group.join(','))}">${escapeHtml(group.join('・'))}</option>`
           ).join('');
         html += `<div class="add-assign-row">
@@ -1534,7 +1511,7 @@
       staffSelect.addEventListener('change', () => {
         const s = staffMap[staffSelect.value];
         roleSelect.innerHTML = '<option value="">役割なし(接客)</option>' +
-          getRoleGroupCandidates(s && s.skills).map(group =>
+          getRoleGroupCandidates(s ? staffSkills(s) : []).map(group =>
             `<option value="${escapeHtml(group.join(','))}">${escapeHtml(group.join('・'))}</option>`
           ).join('');
       });
