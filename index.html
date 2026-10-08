@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>シフト作成アプリ</title>
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
 <header class="app-header">
@@ -58,7 +58,7 @@
           <label><input type="checkbox" name="staff-skill" value="お弁当"> お弁当</label>
           <label><input type="checkbox" name="staff-skill" value="冷凍もの"> 冷凍もの</label>
         </div>
-        <p class="help-text">「新人」にチェックすると、シフト自動作成の「常時必要な最低人数」の人数にはカウントされません</p>
+        <p class="help-text">「新人」にチェックすると、シフト自動作成の最低人数・目標人数にはカウントされません。新人は、ほかのスタッフで最低人数を満たしている時間帯に、1人ずつ研修として配置されます</p>
       </div>
       <div class="form-row">
         <label class="avoid-label">組ませたくないスタッフ</label>
@@ -94,6 +94,12 @@
       </div>
       <p class="help-text">基本シフトを設定すると、「シフト希望入力」で未記入の日はこの時間帯が自動的に希望として使われます(個別に記入すればその内容が優先されます)</p>
       <div class="form-row">
+        <label class="avoid-label">時間帯ごとの優先度(シフト自動作成でこの時間帯にどれだけ優先的に入れるか)</label>
+        <div id="staff-time-priority-list"></div>
+        <button type="button" id="add-staff-time-priority">時間帯の優先度を追加</button>
+        <p class="help-text">「優先度高」の時間帯には積極的に配置され、「優先度低」の時間帯はできるだけ避けて配置されます(希望入力・休みの設定が優先されます)</p>
+      </div>
+      <div class="form-row">
         <button type="submit" id="staff-submit-btn">スタッフを追加</button>
         <button type="button" id="staff-cancel-btn" class="secondary" hidden>編集をキャンセル</button>
       </div>
@@ -108,7 +114,7 @@
   <section id="tab-availability" class="tab-panel">
     <h2>シフト希望入力</h2>
     <p class="help-text">
-      各セルに記入:「空白」=基本シフト通り(未設定なら終日OK)、「/」=休み希望、「14.5-18」=14:30〜18:00、「14.5-」または「14.5~」=14:30〜閉店まで、「-18」=開店〜18:00
+      各セルに記入:「空白」=基本シフト通り(未設定なら終日OK)、「/」=休み希望、「14.5-18」=14:30〜18:00、「14.5-」または「14.5~」=14:30〜閉店まで、「-18」=開店〜18:00(全角で入力してもOK)
     </p>
     <div class="form-row">
       <label>対象月 <input type="month" id="availability-month"></label>
@@ -131,7 +137,7 @@
         <label class="avoid-label">曜日・時間帯ごとの人数ルール</label>
         <div id="headcount-rules-list"></div>
         <button type="button" id="add-headcount-rule">人数ルールを追加</button>
-        <p class="help-text">「最低人数」は必ず確保する人数、「目標人数」は余裕があれば配置したい人数です(未入力なら最低人数と同じ)。目標人数まで届かなくても不足警告にはなりません。</p>
+        <p class="help-text">「最低人数」は必ず確保する人数、「目標人数」は余裕があれば配置したい人数です(未入力なら最低人数と同じ)。目標人数まで届かなくても不足警告にはなりません。「新人」は最低人数・目標人数のどちらにもカウントされません。</p>
       </div>
       <div class="form-row">
         <label class="avoid-label">祝日・特別休業日(登録した日は「土日祝」ルールが適用されます)</label>
@@ -162,11 +168,12 @@
       <button type="button" id="export-csv-btn">CSV出力</button>
       <button type="button" id="print-btn">印刷</button>
     </div>
+    <p class="help-text">自動生成では、必要人数・スキル・役職を満たしたうえで、月全体で全員の出勤率(出勤日数÷出勤できる日数)ができるだけそろうように調整します。「終日OK」の人も、基本シフトのパターン(9:00〜14:30 など)単位で午前だけ・午後だけに振り分けられます。人数が足りている日に、出勤率をそろえるためだけに人を増やすことはしません。</p>
     <div id="generate-result-wrap"></div>
   </section>
 
 </main>
 
-<script src="app.js?v=11"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>

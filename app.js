@@ -182,7 +182,7 @@
   }
 
   function getDefaultRangeForStaffDate(staff, dateStr, settings) {
-    const key = isWeekendDate(dateStr) ? staff.defaultWeekend : staff.defaultWeekday;
+    const key = getDayType(dateStr, settings) === 'weekend' ? staff.defaultWeekend : staff.defaultWeekday;
     const p = PATTERNS[key];
     if (!p) return { start: settings.openTime, end: settings.closeTime };
     return { start: Math.max(p.start, settings.openTime), end: Math.min(p.end, settings.closeTime) };
@@ -211,13 +211,24 @@
     return null;
   }
 
+  // 日本語入力のまま打たれやすい全角数字・記号を半角にそろえる
+  function normalizeAvailabilityInput(str) {
+    return str
+      .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(/[．。]/g, '.')
+      .replace(/[：]/g, ':')
+      .replace(/[／]/g, '/')
+      .replace(/[～〜~－ー―‐−]/g, '-')
+      .replace(/\s+/g, '');
+  }
+
   function parseAvailabilityRaw(raw, open, close) {
-    const s = raw.trim();
+    const s = normalizeAvailabilityInput(raw.trim());
     if (s === '') return { type: 'full', start: open, end: close, raw };
     if (s === '/' || s === '×' || s === '休' || s.toLowerCase() === 'off') {
       return { type: 'off', raw };
     }
-    const norm = s.replace(/[~〜]/g, '-');
+    const norm = s;
     if (norm.includes('-')) {
       const idx = norm.indexOf('-');
       const leftRaw = norm.slice(0, idx).trim();
@@ -253,6 +264,50 @@
   // ---------- staff tab ----------
 
   let editingStaffId = null;
+  let staffTimePriorities = [];
+
+  function renderStaffTimePriorityList() {
+    const wrap = document.getElementById('staff-time-priority-list');
+    if (staffTimePriorities.length === 0) {
+      wrap.innerHTML = '<p class="help-text">優先度の設定はありません(すべての時間帯が同じ扱いになります)</p>';
+      return;
+    }
+    wrap.innerHTML = staffTimePriorities.map((p, i) => `
+      <div class="form-row" data-idx="${i}">
+        <input type="time" class="priority-start" value="${hoursToTimeStr(p.start)}">
+        〜
+        <input type="time" class="priority-end" value="${hoursToTimeStr(p.end)}">
+        <select class="priority-level">
+          <option value="high" ${p.level === 'high' ? 'selected' : ''}>優先度高(積極的に入れる)</option>
+          <option value="low" ${p.level === 'low' ? 'selected' : ''}>優先度低(できるだけ避ける)</option>
+        </select>
+        <button type="button" class="secondary priority-remove">削除</button>
+      </div>`).join('');
+
+    wrap.querySelectorAll('[data-idx]').forEach(row => {
+      const idx = Number(row.dataset.idx);
+      row.querySelector('.priority-start').addEventListener('change', (e) => {
+        staffTimePriorities[idx].start = timeStrToHours(e.target.value);
+      });
+      row.querySelector('.priority-end').addEventListener('change', (e) => {
+        staffTimePriorities[idx].end = timeStrToHours(e.target.value);
+      });
+      row.querySelector('.priority-level').addEventListener('change', (e) => {
+        staffTimePriorities[idx].level = e.target.value;
+      });
+      row.querySelector('.priority-remove').addEventListener('click', () => {
+        staffTimePriorities.splice(idx, 1);
+        renderStaffTimePriorityList();
+      });
+    });
+  }
+
+  function bindStaffTimePriorityControls() {
+    document.getElementById('add-staff-time-priority').addEventListener('click', () => {
+      staffTimePriorities.push({ start: DATA.settings.openTime, end: DATA.settings.closeTime, level: 'high' });
+      renderStaffTimePriorityList();
+    });
+  }
 
   function renderAvoidCheckboxes(excludeId) {
     const wrap = document.getElementById('staff-avoid-list');
@@ -299,10 +354,20 @@
         Object.keys(DATA.availability).forEach(k => {
           if (k.startsWith(id + '__')) delete DATA.availability[k];
         });
+        // 作成済みシフト表からも外し、不足判定を計算し直す
+        Object.keys(DATA.results || {}).forEach(ym => {
+          Object.keys(DATA.results[ym]).forEach(date => {
+            const day = DATA.results[ym][date];
+            const before = day.assignments.length;
+            day.assignments = day.assignments.filter(a => a.staffId !== id);
+            if (day.assignments.length !== before) recomputeShortages(ym, date);
+          });
+        });
         saveData(DATA);
         renderStaffTab();
         renderAvailabilityGrid();
         renderCoverageForm();
+        renderGenerateResult();
       });
     });
     tbody.querySelectorAll('.edit-staff-btn').forEach(btn => {
@@ -328,6 +393,8 @@
     });
     document.getElementById('staff-default-weekday').value = s.defaultWeekday || '';
     document.getElementById('staff-default-weekend').value = s.defaultWeekend || '';
+    staffTimePriorities = JSON.parse(JSON.stringify(s.timePriorities || []));
+    renderStaffTimePriorityList();
 
     document.getElementById('staff-submit-btn').textContent = 'スタッフを更新';
     document.getElementById('staff-cancel-btn').hidden = false;
@@ -338,6 +405,8 @@
     editingStaffId = null;
     document.getElementById('staff-form').reset();
     renderAvoidCheckboxes();
+    staffTimePriorities = [];
+    renderStaffTimePriorityList();
     document.getElementById('staff-submit-btn').textContent = 'スタッフを追加';
     document.getElementById('staff-cancel-btn').hidden = true;
   }
@@ -359,6 +428,7 @@
       ).map(cb => cb.value);
       const defaultWeekday = document.getElementById('staff-default-weekday').value;
       const defaultWeekend = document.getElementById('staff-default-weekend').value;
+      const timePriorities = staffTimePriorities.filter(p => p.start < p.end);
 
       if (editingStaffId) {
         const s = DATA.staff.find(x => x.id === editingStaffId);
@@ -385,11 +455,12 @@
           s.avoidWith = [...avoidWith];
           s.defaultWeekday = defaultWeekday;
           s.defaultWeekend = defaultWeekend;
+          s.timePriorities = timePriorities;
         }
         cancelStaffEdit();
       } else {
         const id = 's' + Date.now() + Math.floor(Math.random() * 1000);
-        DATA.staff.push({ id, name, hourlyWage, jobRole, noContinuousShift, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend });
+        DATA.staff.push({ id, name, hourlyWage, jobRole, noContinuousShift, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend, timePriorities });
         avoidWith.forEach(otherId => {
           const other = DATA.staff.find(s => s.id === otherId);
           if (other) {
@@ -398,6 +469,8 @@
           }
         });
         e.target.reset();
+        staffTimePriorities = [];
+        renderStaffTimePriorityList();
       }
 
       saveData(DATA);
@@ -419,7 +492,7 @@
     }
     let html = '<div class="avail-grid-scroll"><table class="avail-grid"><thead><tr><th class="staff-col">スタッフ</th>';
     dates.forEach(d => {
-      html += `<th class="${d.isWeekend ? 'day-header-weekend' : ''}">${d.day}<br>${d.weekday}</th>`;
+      html += `<th class="${getDayType(d.dateStr, DATA.settings) === 'weekend' ? 'day-header-weekend' : ''}">${d.day}<br>${d.weekday}</th>`;
     });
     html += '</tr></thead><tbody>';
     DATA.staff.forEach(s => {
@@ -797,10 +870,18 @@
     return mergeConsecutive(shortages);
   }
 
-  function deriveDesiredShortages(slots, desiredExtra) {
+  // 目標人数までの残り人数。headNeed は「最低人数 − 配置済み人数(新人除く)」なので、
+  // 負の値は最低人数を超えて配置できている人数を表す。
+  function desiredGap(headNeed, desiredExtra, slotStart) {
+    return Math.max(0, headNeed.get(slotStart) + desiredExtra.get(slotStart));
+  }
+
+  // 目標人数の未達を集計する(最低人数自体が不足している枠は不足警告側で出すので除外)
+  function deriveDesiredShortages(slots, headNeed, desiredExtra) {
     const items = [];
     for (const sl of slots) {
-      const remain = desiredExtra.get(sl.start);
+      if (headNeed.get(sl.start) > 0) continue;
+      const remain = desiredGap(headNeed, desiredExtra, sl.start);
       if (remain > 0) items.push({ start: sl.start, end: sl.end, remain });
     }
     if (!items.length) return [];
@@ -819,6 +900,25 @@
     return merged;
   }
 
+  // スタッフが設定した「時間帯ごとの優先度」を、候補の時間範囲に重なる30分枠ごとに加点/減点してスコア化する。
+  // 優先度高の枠は+1、優先度低の枠は-1(重なりがない枠や設定がなければ0)。
+  function priorityScoreForCandidate(staff, cand, slots) {
+    const prios = (staff && staff.timePriorities) || [];
+    if (!prios.length) return 0;
+    let score = 0;
+    for (const sl of slots) {
+      if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9) {
+        for (const p of prios) {
+          if (sl.start >= p.start - 1e-9 && sl.end <= p.end + 1e-9) {
+            score += p.level === 'high' ? 1 : p.level === 'low' ? -1 : 0;
+            break;
+          }
+        }
+      }
+    }
+    return score;
+  }
+
   function hasConflict(cand, picked, staffMap) {
     const staff = staffMap[cand.staffId];
     for (const p of picked) {
@@ -826,6 +926,21 @@
       if (!overlap) continue;
       const pStaff = staffMap[p.staffId];
       if ((staff.avoidWith || []).includes(p.staffId) || (pStaff.avoidWith || []).includes(cand.staffId)) return true;
+    }
+    return false;
+  }
+
+  // 「社員」は必要な最低人数(通常1人)を満たせば足りるため、同じ時間帯に社員が重複しないように
+  // できるだけ避ける(人が足りずどうしても必要な場合は重複を許す、あくまでソフトな優先度)。
+  const AVOID_ROLE_OVERLAP = '社員';
+  function hasAvoidableRoleOverlap(cand, picked, staffMap) {
+    const staff = staffMap[cand.staffId];
+    if ((staff.jobRole || 'アルバイト') !== AVOID_ROLE_OVERLAP) return false;
+    for (const p of picked) {
+      const overlap = cand.start < p.end && p.start < cand.end;
+      if (!overlap) continue;
+      const pStaff = staffMap[p.staffId];
+      if ((pStaff.jobRole || 'アルバイト') === AVOID_ROLE_OVERLAP) return true;
     }
     return false;
   }
@@ -860,7 +975,7 @@
     return { score: headScore + bestSkillScore * 2 + jobRoleScore * 2, roles: bestRoles };
   }
 
-  function solveDayCoverage(dayAvail, settings, staffMap, cumulativeHours, dayType) {
+  function solveDayCoverage(dayAvail, settings, staffMap, loadOf, dayType) {
     const slots = buildSlots(settings.openTime, settings.closeTime, 0.5);
     const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(settings, slots, dayType);
     let remaining = dayAvail.slice();
@@ -882,8 +997,10 @@
         const { score: rawScore, roles } = bestRoleAndScore(cand, slots, headNeed, skillNeed, jobRoleNeed, staffMap);
         let score = rawScore;
         if (score <= 0) continue;
+        score += priorityScoreForCandidate(staffMap[cand.staffId], cand, slots);
         if (hasConflict(cand, picked, staffMap)) score -= 1000;
-        score -= (cumulativeHours[cand.staffId] || 0) * 0.01;
+        if (hasAvoidableRoleOverlap(cand, picked, staffMap)) score -= 50;
+        score -= loadOf(cand.staffId) * GREEDY_LOAD_WEIGHT;
         score -= (cand.end - cand.start) * 0.001;
         if (score > bestScore) { bestScore = score; best = cand; bestRoles = roles; }
       }
@@ -894,27 +1011,29 @@
       applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staffMap[best.staffId]);
     }
 
-    const shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
-
     // 最低人数(必須)を満たした後、余裕があれば「目標人数」まで追加で配置を試みる。
     // 満たせなくても不足警告にはしない(あくまで努力目標)。
+    // 最低人数と同様、新人は目標人数にもカウントしない。
     function totalDesiredUnmet() {
       let unmet = 0;
-      for (const sl of slots) unmet += Math.max(0, desiredExtra.get(sl.start));
+      for (const sl of slots) unmet += desiredGap(headNeed, desiredExtra, sl.start);
       return unmet;
     }
     while (totalDesiredUnmet() > 0 && remaining.length > 0) {
       let best = null, bestScore = -Infinity;
       for (const cand of remaining) {
+        if (isNewbie(staffMap[cand.staffId])) continue;
         let score = 0;
         for (const sl of slots) {
-          if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9 && desiredExtra.get(sl.start) > 0) {
+          if (sl.start >= cand.start - 1e-9 && sl.end <= cand.end + 1e-9 && desiredGap(headNeed, desiredExtra, sl.start) > 0) {
             score += 1;
           }
         }
         if (score <= 0) continue;
+        score += priorityScoreForCandidate(staffMap[cand.staffId], cand, slots);
         if (hasConflict(cand, picked, staffMap)) score -= 1000;
-        score -= (cumulativeHours[cand.staffId] || 0) * 0.01;
+        if (hasAvoidableRoleOverlap(cand, picked, staffMap)) score -= 50;
+        score -= loadOf(cand.staffId) * GREEDY_LOAD_WEIGHT;
         score -= (cand.end - cand.start) * 0.001;
         if (score > bestScore) { bestScore = score; best = cand; }
       }
@@ -923,64 +1042,316 @@
       const assign = { staffId: best.staffId, start: best.start, end: best.end, roles: roles || [], desiredOnly: true };
       picked.push(assign);
       remaining = remaining.filter(c => c.staffId !== best.staffId);
-      for (const sl of slots) {
-        if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
-          desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
-        }
-      }
-      (roles || []).forEach(roleName => {
-        for (const sl of slots) {
-          if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
-            const sk = skillNeed.get(sl.start);
-            if (sk[roleName] !== undefined) sk[roleName] = Math.max(0, sk[roleName] - 1);
-          }
-        }
+      applyAssignmentToNeed(assign, slots, headNeed, skillNeed, jobRoleNeed, staffMap[best.staffId]);
+    }
+
+    // 目標人数のために追加した人が不足スキル・役職を埋めることもあるので、最後に集計する
+    const shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
+    const desiredShortages = deriveDesiredShortages(slots, headNeed, desiredExtra);
+    return { assignments: picked, shortages, desiredShortages };
+  }
+
+  // ---------- 月全体でのバランス調整 ----------
+  //
+  // 日ごとの貪欲法だけだと「その日に一番多く枠を埋められる人(=希望時間が長い人、同点なら登録順が上の人)」が
+  // 毎日選ばれ、月を通すと特定の人に偏る。そこで貪欲法で作った案を出発点に、
+  // 「1日分の入れ替え・追加・削除」を、月全体の評価が良くなる限り繰り返す(局所探索)。
+  //
+  // 評価(小さいほど良い)の重み。上から順に重要。
+  const W_SHORTAGE = 1000;      // 最低人数・必須スキル・必須役職の不足(30分枠×人数ごと)
+  const W_CONFLICT = 5000;      // 組ませたくない2人の同時勤務(1組ごと。2.5時間分の不足よりは避ける)
+  const W_DESIRED = 10;         // 目標人数までの不足(30分枠×人数ごと)
+  const W_FAIR_DAYS = 30;       // 月の出勤日数の偏り(下の fairnessPenalty)
+  const W_FAIR_HOURS = 2;       // 月の勤務時間の偏り(同上)
+  const W_PRIORITY = 3;         // スタッフの時間帯優先度(30分枠ごと)
+  const W_ROLE_OVERLAP = 5;     // 社員どうしの重複(30分枠ごと)
+  const W_LABOR = 1;            // 勤務時間そのもの(30分枠ごと。不要な配置や長すぎる配置を減らす)
+  const W_NEWBIE_ALONE = 1000;  // 新人が「最低人数を満たしていない時間帯」や「新人どうし」で入っている(30分枠×人数ごと)
+  const GREEDY_LOAD_WEIGHT = 10; // 初期案(貪欲法)で、すでに多く入っている人を後回しにする強さ
+  const MAX_SWEEPS = 40;
+
+  // 月を通した配置を「出勤可能な量に比例した配分」に近づけるためのペナルティ。
+  // 全員の 出勤日数÷出勤可能日数(出勤率)と 勤務時間÷勤務可能時間(配置率)がそろうのが理想で、
+  // そこからのズレの二乗和で測る。希望を多く出した人ほど多く入り、少ない人は少なめになる。
+  function proportionalDeviation(used, avail, staffIds) {
+    let U = 0, A = 0;
+    staffIds.forEach(id => { if (avail[id] > 0) { U += used[id]; A += avail[id]; } });
+    if (A <= 0) return 0;
+    const ratio = U / A;
+    let p = 0;
+    staffIds.forEach(id => {
+      const a = avail[id];
+      if (a > 0) { const dev = used[id] - ratio * a; p += dev * dev / a; }
+    });
+    return p;
+  }
+
+  function fairnessPenalty(load, avail, staffIds) {
+    return proportionalDeviation(load.days, avail.days, staffIds) * W_FAIR_DAYS +
+      proportionalDeviation(load.hours, avail.hours, staffIds) * W_FAIR_HOURS;
+  }
+
+  // ある日の必要人数などを配列にしたもの(評価のたびに作り直さないよう日ごとにキャッシュ)
+  function dayTemplate(day) {
+    if (day.tmpl) return day.tmpl;
+    const { slots, dayType } = day;
+    const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(DATA.settings, slots, dayType);
+    day.tmpl = {
+      head: slots.map(sl => headNeed.get(sl.start)),
+      extra: slots.map(sl => desiredExtra.get(sl.start)),
+      skill: slots.map(sl => skillNeed.get(sl.start)),
+      role: slots.map(sl => jobRoleNeed.get(sl.start)),
+      ranges: new Map(),
+      prio: new Map()
+    };
+    return day.tmpl;
+  }
+
+  // 勤務 a に完全に含まれる30分枠の範囲 [i0, i1)
+  function slotRange(day, a) {
+    const tmpl = dayTemplate(day);
+    const key = a.start + '-' + a.end;
+    let r = tmpl.ranges.get(key);
+    if (!r) {
+      let i0 = -1, i1 = -1;
+      day.slots.forEach((sl, i) => {
+        if (sl.start >= a.start - 1e-9 && sl.end <= a.end + 1e-9) { if (i0 < 0) i0 = i; i1 = i + 1; }
       });
-      const bestJobRole = (staffMap[best.staffId].jobRole) || 'アルバイト';
-      for (const sl of slots) {
-        if (sl.start >= best.start - 1e-9 && sl.end <= best.end + 1e-9) {
-          const rn = jobRoleNeed.get(sl.start);
-          if (rn[bestJobRole] !== undefined) rn[bestJobRole] = Math.max(0, rn[bestJobRole] - 1);
+      r = i0 < 0 ? [0, 0] : [i0, i1];
+      tmpl.ranges.set(key, r);
+    }
+    return r;
+  }
+
+  const roleGroupCache = new WeakMap();
+  function roleGroupsOf(staff) {
+    let g = roleGroupCache.get(staff);
+    if (!g) { g = getRoleGroupCandidates(staff.skills); roleGroupCache.set(staff, g); }
+    return g;
+  }
+
+  // ある日の配置案を評価し、役割(スキル)の割り振りもあわせて決める
+  function evaluateDay(day, assigned, staffMap) {
+    const tmpl = dayTemplate(day);
+    const n = day.slots.length;
+    const head = tmpl.head.slice();
+    const skill = tmpl.skill.map(o => Object.assign({}, o));
+    const role = tmpl.role.map(o => Object.assign({}, o));
+    const withRoles = assigned.map(a => ({ staffId: a.staffId, start: a.start, end: a.end, roles: [] }));
+    const ranges = withRoles.map(a => slotRange(day, a));
+
+    const newbies = new Array(n).fill(0);
+    const veterans = new Array(n).fill(0);
+    withRoles.forEach((a, k) => {
+      const st = staffMap[a.staffId];
+      const newbie = isNewbie(st);
+      const jobRole = st.jobRole || 'アルバイト';
+      for (let i = ranges[k][0]; i < ranges[k][1]; i++) {
+        if (newbie) newbies[i] += 1; else veterans[i] += 1;
+        if (!newbie) head[i] -= 1;
+        if (role[i][jobRole] !== undefined) role[i][jobRole] = Math.max(0, role[i][jobRole] - 1);
+      }
+    });
+
+    // 担当できる役割が少ない人から順に、まだ足りていない役割を割り当てる
+    const order = withRoles.map((a, k) => k).sort((x, y) =>
+      roleGroupsOf(staffMap[withRoles[x].staffId]).length - roleGroupsOf(staffMap[withRoles[y].staffId]).length);
+    order.forEach(k => {
+      const a = withRoles[k];
+      const [i0, i1] = ranges[k];
+      let best = null, bestScore = 0;
+      roleGroupsOf(staffMap[a.staffId]).forEach(group => {
+        let s = 0;
+        for (let i = i0; i < i1; i++) group.forEach(sk => { if (skill[i][sk] > 0) s++; });
+        if (s > bestScore) { bestScore = s; best = group; }
+      });
+      if (!best) return;
+      a.roles = best.slice();
+      for (let i = i0; i < i1; i++) {
+        best.forEach(name => { if (skill[i][name] !== undefined) skill[i][name] = Math.max(0, skill[i][name] - 1); });
+      }
+    });
+
+    // coverage: 不足・目標未達だけの評価(人を追加する価値があるかの判定に使う)
+    let coverage = 0;
+    for (let i = 0; i < n; i++) {
+      coverage += Math.max(0, head[i]) * W_SHORTAGE;
+      for (const k in skill[i]) coverage += Math.max(0, skill[i][k]) * W_SHORTAGE;
+      for (const k in role[i]) coverage += Math.max(0, role[i][k]) * W_SHORTAGE;
+      coverage += Math.max(0, head[i] + tmpl.extra[i]) * W_DESIRED;
+    }
+    let penalty = coverage;
+    // 新人は、新人以外で最低人数を満たしている時間帯に、新人1人ずつで入れる
+    for (let i = 0; i < n; i++) {
+      if (newbies[i] === 0) continue;
+      if (head[i] > 0 || veterans[i] === 0) penalty += newbies[i] * W_NEWBIE_ALONE;
+      else if (newbies[i] > 1) penalty += (newbies[i] - 1) * W_NEWBIE_ALONE;
+    }
+    for (let i = 0; i < withRoles.length; i++) {
+      const a = withRoles[i], sa = staffMap[a.staffId];
+      penalty += (a.end - a.start) * 2 * W_LABOR;
+      const pk = a.staffId + '|' + a.start + '|' + a.end;
+      let prio = tmpl.prio.get(pk);
+      if (prio === undefined) { prio = priorityScoreForCandidate(sa, a, day.slots); tmpl.prio.set(pk, prio); }
+      penalty -= prio * W_PRIORITY;
+      for (let j = i + 1; j < withRoles.length; j++) {
+        const b = withRoles[j], sb = staffMap[b.staffId];
+        const ov = Math.min(a.end, b.end) - Math.max(a.start, b.start);
+        if (ov <= 0) continue;
+        if ((sa.avoidWith || []).includes(b.staffId) || (sb.avoidWith || []).includes(a.staffId)) penalty += W_CONFLICT;
+        if ((sa.jobRole || 'アルバイト') === AVOID_ROLE_OVERLAP && (sb.jobRole || 'アルバイト') === AVOID_ROLE_OVERLAP) {
+          penalty += ov * 2 * W_ROLE_OVERLAP;
         }
       }
     }
+    return { penalty, coverage, withRoles };
+  }
 
-    const desiredShortages = deriveDesiredShortages(slots, desiredExtra);
-    return { assignments: picked, shortages, desiredShortages };
+  // スタッフがその日に入れる時間帯の候補。
+  // 希望時間帯そのものに加えて、その中に収まる基本パターン(9:00〜14:30 など)も候補にする。
+  // これで「終日OK」の人を毎回丸一日入れるのではなく、午前だけ・午後だけにも振り分けられる。
+  // (通し勤務不可の人は、14:30をまたぐ候補を除き、午前・午後に分けた候補にする)
+  function buildDayCandidates(dateStr) {
+    const cands = [];
+    DATA.staff.forEach(s => {
+      let rec = DATA.availability[s.id + '__' + dateStr];
+      if (!rec) {
+        const def = getDefaultRangeForStaffDate(s, dateStr, DATA.settings);
+        rec = { type: 'range', start: def.start, end: def.end };
+      }
+      if (rec.type === 'off' || rec.type === 'invalid') return;
+      const start = Math.max(rec.start, DATA.settings.openTime);
+      const end = Math.min(rec.end, DATA.settings.closeTime);
+      if (!(start < end)) return;
+      const crossesSplit = (st, en) => st < AM_PM_SPLIT - 1e-9 && en > AM_PM_SPLIT + 1e-9;
+      const windows = [];
+      if (s.noContinuousShift && crossesSplit(start, end)) {
+        windows.push([start, AM_PM_SPLIT], [AM_PM_SPLIT, end]);
+      } else {
+        windows.push([start, end]);
+      }
+      Object.values(PATTERNS).forEach(p => {
+        const ps = Math.max(p.start, DATA.settings.openTime);
+        const pe = Math.min(p.end, DATA.settings.closeTime);
+        if (!(ps < pe) || ps < start - 1e-9 || pe > end + 1e-9) return;
+        if (s.noContinuousShift && crossesSplit(ps, pe)) return;
+        windows.push([ps, pe]);
+      });
+      const seen = new Set();
+      windows.forEach(([st, en]) => {
+        const k = st + '-' + en;
+        if (seen.has(k)) return;
+        seen.add(k);
+        cands.push({ staffId: s.id, start: st, end: en });
+      });
+    });
+    return cands;
+  }
+
+  // 月の出勤可能日数と勤務可能時間(その日に入れる最長の時間帯の合計)
+  function computeAvailability(ym) {
+    const avail = { days: {}, hours: {} };
+    DATA.staff.forEach(s => { avail.days[s.id] = 0; avail.hours[s.id] = 0; });
+    getDatesInMonth(ym).forEach(d => {
+      const longest = {};
+      buildDayCandidates(d.dateStr).forEach(c => {
+        longest[c.staffId] = Math.max(longest[c.staffId] || 0, c.end - c.start);
+      });
+      Object.keys(longest).forEach(id => { avail.days[id] += 1; avail.hours[id] += longest[id]; });
+    });
+    return avail;
   }
 
   function generateForMonth(ym) {
     const staffMap = {};
     DATA.staff.forEach(s => { staffMap[s.id] = s; });
-    const dates = getDatesInMonth(ym);
-    const cumulativeHours = {};
-    DATA.staff.forEach(s => { cumulativeHours[s.id] = 0; });
-    const result = {};
+    const staffIds = DATA.staff.map(s => s.id);
+    const slots = buildSlots(DATA.settings.openTime, DATA.settings.closeTime, 0.5);
+    const avail = computeAvailability(ym);
+    const load = { days: {}, hours: {} };
+    staffIds.forEach(id => { load.days[id] = 0; load.hours[id] = 0; });
+    const addLoad = (a, sign) => { load.days[a.staffId] += sign; load.hours[a.staffId] += sign * (a.end - a.start); };
+    const loadOf = id => (avail.days[id] > 0 ? load.days[id] / avail.days[id] : 0);
 
-    dates.forEach(d => {
-      const dayAvail = [];
-      DATA.staff.forEach(s => {
-        const key = s.id + '__' + d.dateStr;
-        let rec = DATA.availability[key];
-        if (!rec) {
-          const def = getDefaultRangeForStaffDate(s, d.dateStr, DATA.settings);
-          rec = { type: 'range', start: def.start, end: def.end };
-        }
-        if (rec.type === 'off' || rec.type === 'invalid') return;
-        const start = Math.max(rec.start, DATA.settings.openTime);
-        const end = Math.min(rec.end, DATA.settings.closeTime);
-        if (!(start < end)) return;
-        if (s.noContinuousShift && start < AM_PM_SPLIT && end > AM_PM_SPLIT) {
-          dayAvail.push({ staffId: s.id, start, end: AM_PM_SPLIT });
-          dayAvail.push({ staffId: s.id, start: AM_PM_SPLIT, end });
-        } else {
-          dayAvail.push({ staffId: s.id, start, end });
-        }
+    // 1) 日ごとの貪欲法で初期案を作る(すでに出勤率が高い人ほど後回し)
+    const days = getDatesInMonth(ym).map(d => {
+      const day = { dateStr: d.dateStr, dayType: getDayType(d.dateStr, DATA.settings), slots, cands: buildDayCandidates(d.dateStr) };
+      const r = solveDayCoverage(day.cands, DATA.settings, staffMap, loadOf, day.dayType);
+      day.assigned = r.assignments.map(a => ({ staffId: a.staffId, start: a.start, end: a.end }));
+      day.assigned.forEach(a => addLoad(a, 1));
+      const ev = evaluateDay(day, day.assigned, staffMap);
+      day.penalty = ev.penalty;
+      day.coverage = ev.coverage;
+      return day;
+    });
+
+    // 2) 月全体の評価が良くなる限り、1日単位の入れ替え・追加・削除を繰り返す
+    let fair = fairnessPenalty(load, avail, staffIds);
+    for (let sweep = 0; sweep < MAX_SWEEPS; sweep++) {
+      let improved = false;
+      days.forEach(day => {
+        const assignedIds = new Set(day.assigned.map(a => a.staffId));
+        // 候補の手: removed を外して added を入れる
+        const moves = [];
+        day.assigned.forEach((a, i) => {
+          moves.push({ removed: [a], added: [] });
+          day.cands.forEach(c => {
+            if (c.staffId === a.staffId ? (c.start !== a.start || c.end !== a.end) : !assignedIds.has(c.staffId)) {
+              moves.push({ removed: [a], added: [c] });
+            }
+          });
+          // 交代: a の勤務を短くし、空いた時間を別の人が引き継ぐ(例: 終日→午前のみ + 午後に別の人)
+          day.cands.forEach(w => {
+            if (w.staffId !== a.staffId || w.start < a.start - 1e-9 || w.end > a.end + 1e-9) return;
+            if (w.start === a.start && w.end === a.end) return;
+            day.cands.forEach(c => {
+              if (assignedIds.has(c.staffId)) return;
+              const coversFreed = (c.start < w.start && c.end > a.start) || (c.end > w.end && c.start < a.end);
+              if (coversFreed) moves.push({ removed: [a], added: [w, c] });
+            });
+          });
+        });
+        day.cands.forEach(c => { if (!assignedIds.has(c.staffId)) moves.push({ removed: [], added: [c] }); });
+
+        let best = null, bestDelta = -1e-6;
+        moves.forEach(m => {
+          const next = day.assigned.filter(a => !m.removed.includes(a)).concat(m.added);
+          m.removed.forEach(a => addLoad(a, -1));
+          m.added.forEach(a => addLoad(a, 1));
+          const nextFair = fairnessPenalty(load, avail, staffIds);
+          m.removed.forEach(a => addLoad(a, 1));
+          m.added.forEach(a => addLoad(a, -1));
+          const ev = evaluateDay(day, next, staffMap);
+          const delta = (ev.penalty - day.penalty) + (nextFair - fair);
+          if (delta >= bestDelta) return;
+          // 出勤率をそろえるためだけに人を入れない。
+          // 新しく入る人は、その人がいないと不足・目標未達が出るときだけ認める(同じ人の時間変更は対象外)。
+          // ただし新人は人数に数えないので例外とし、上の W_NEWBIE_ALONE の条件を満たす範囲で研修として入れる。
+          const newcomer = m.added.find(c => !m.removed.some(a => a.staffId === c.staffId));
+          if (newcomer && !isNewbie(staffMap[newcomer.staffId])) {
+            const without = evaluateDay(day, next.filter(c => c !== newcomer), staffMap);
+            if (ev.coverage >= without.coverage - 1e-9) return;
+          }
+          bestDelta = delta;
+          best = { m, next, ev, nextFair };
+        });
+        if (!best) return;
+        best.m.removed.forEach(a => addLoad(a, -1));
+        best.m.added.forEach(a => addLoad(a, 1));
+        day.assigned = best.next;
+        day.penalty = best.ev.penalty;
+        day.coverage = best.ev.coverage;
+        fair = best.nextFair;
+        improved = true;
       });
-      const dayType = getDayType(d.dateStr, DATA.settings);
-      const dayResult = solveDayCoverage(dayAvail, DATA.settings, staffMap, cumulativeHours, dayType);
-      dayResult.assignments.forEach(a => { cumulativeHours[a.staffId] += (a.end - a.start); });
-      result[d.dateStr] = dayResult;
+      if (!improved) break;
+    }
+
+    const result = {};
+    days.forEach(day => {
+      const assignments = evaluateDay(day, day.assigned, staffMap).withRoles
+        .sort((x, y) => x.start - y.start || x.end - y.end);
+      result[day.dateStr] = Object.assign({ assignments }, summarizeDay(day.dateStr, assignments));
     });
 
     DATA.results = DATA.results || {};
@@ -989,22 +1360,23 @@
     return result;
   }
 
-  function recomputeShortages(ym, date) {
+  function summarizeDay(date, assignments) {
     const staffMap = {};
     DATA.staff.forEach(s => { staffMap[s.id] = s; });
     const slots = buildSlots(DATA.settings.openTime, DATA.settings.closeTime, 0.5);
     const dayType = getDayType(date, DATA.settings);
     const { headNeed, desiredExtra, skillNeed, jobRoleNeed } = buildNeedMaps(DATA.settings, slots, dayType);
-    DATA.results[ym][date].assignments.forEach(a => {
+    assignments.forEach(a => {
       applyAssignmentToNeed(a, slots, headNeed, skillNeed, jobRoleNeed, staffMap[a.staffId] || { skills: [], jobRole: 'アルバイト' });
-      for (const sl of slots) {
-        if (sl.start >= a.start - 1e-9 && sl.end <= a.end + 1e-9) {
-          desiredExtra.set(sl.start, Math.max(0, desiredExtra.get(sl.start) - 1));
-        }
-      }
     });
-    DATA.results[ym][date].shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
-    DATA.results[ym][date].desiredShortages = deriveDesiredShortages(slots, desiredExtra);
+    return {
+      shortages: deriveShortages(slots, headNeed, skillNeed, jobRoleNeed),
+      desiredShortages: deriveDesiredShortages(slots, headNeed, desiredExtra)
+    };
+  }
+
+  function recomputeShortages(ym, date) {
+    Object.assign(DATA.results[ym][date], summarizeDay(date, DATA.results[ym][date].assignments));
   }
 
   // ---------- generate tab rendering ----------
@@ -1068,16 +1440,27 @@
       html += '</div>';
     });
 
-    html += '<table class="data-table summary-table"><thead><tr><th>スタッフ</th><th>合計時間</th><th>時給</th><th>給与(概算)</th></tr></thead><tbody>';
+    const workDays = {};
+    DATA.staff.forEach(s => { workDays[s.id] = 0; });
+    dates.forEach(d => {
+      const dayResult = monthResult[d.dateStr];
+      if (!dayResult) return;
+      new Set(dayResult.assignments.map(a => a.staffId)).forEach(id => { if (id in workDays) workDays[id]++; });
+    });
+    const avail = computeAvailability(ym);
+
+    html += '<table class="data-table summary-table"><thead><tr><th>スタッフ</th><th>出勤日数</th><th>出勤率</th><th>合計時間</th><th>時給</th><th>給与(概算)</th></tr></thead><tbody>';
     let totalWage = 0;
     DATA.staff.forEach(s => {
       const wage = s.hourlyWage || 0;
       const pay = Math.round(totalHours[s.id] * wage);
       totalWage += pay;
-      html += `<tr><td>${escapeHtml(s.name)}</td><td>${totalHours[s.id].toFixed(1)}時間</td><td>${wage.toLocaleString()}円</td><td>${pay.toLocaleString()}円</td></tr>`;
+      const rate = avail.days[s.id] > 0 ? Math.round(workDays[s.id] / avail.days[s.id] * 100) + '%' : '-';
+      html += `<tr><td>${escapeHtml(s.name)}</td><td>${workDays[s.id]}日 / ${avail.days[s.id]}日</td><td>${rate}</td><td>${totalHours[s.id].toFixed(1)}時間</td><td>${wage.toLocaleString()}円</td><td>${pay.toLocaleString()}円</td></tr>`;
     });
-    html += `<tr><td><strong>合計</strong></td><td></td><td></td><td><strong>${totalWage.toLocaleString()}円</strong></td></tr>`;
+    html += `<tr><td><strong>合計</strong></td><td></td><td></td><td></td><td></td><td><strong>${totalWage.toLocaleString()}円</strong></td></tr>`;
     html += '</tbody></table>';
+    html += '<p class="help-text">※出勤日数は「出勤する日数 / 出勤できる日数(希望入力・基本シフトから計算)」です。自動作成では、全員の出勤率ができるだけそろうように月全体で調整します。</p>';
     html += '<p class="help-text">※給与は「合計時間×時給」の概算です。深夜割増・交通費・控除等は考慮していません。</p>';
 
     wrap.innerHTML = html;
@@ -1159,8 +1542,19 @@
   function bindGenerateButtons() {
     document.getElementById('generate-btn').addEventListener('click', () => {
       const ym = document.getElementById('generate-month').value || currentYM();
-      generateForMonth(ym);
-      renderGenerateResult();
+      const btn = document.getElementById('generate-btn');
+      btn.disabled = true;
+      btn.textContent = '作成中…(月全体のバランスを調整しています)';
+      // 表示を更新してから重い計算を始める
+      setTimeout(() => {
+        try {
+          generateForMonth(ym);
+          renderGenerateResult();
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '自動生成する';
+        }
+      }, 30);
     });
     document.getElementById('generate-month').addEventListener('change', renderGenerateResult);
     document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
@@ -1249,6 +1643,8 @@
   document.addEventListener('DOMContentLoaded', async () => {
     initTabs();
     bindStaffForm();
+    bindStaffTimePriorityControls();
+    renderStaffTimePriorityList();
     bindCoverageForm();
     bindGenerateButtons();
     bindDataTransferButtons();
