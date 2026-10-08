@@ -141,6 +141,24 @@
     else localStorage.removeItem(BACKEND_URL_KEY);
   }
 
+  // 共有データベースのURLは公開リポジトリに含めず、各端末で1回だけ
+  // 「https://…/shift-app/#db=<Google Apps ScriptのURL>」を開いて登録する(#db=clear で解除)。
+  // 登録後はアドレスバーからURLを消し、ブックマーク等に残らないようにする。
+  function applyBackendUrlFromHash() {
+    const m = location.hash.match(/^#db=(.+)$/);
+    if (!m) return;
+    let value = m[1];
+    try { value = decodeURIComponent(value); } catch (e) { /* そのまま使う */ }
+    if (value === 'clear') {
+      setBackendUrl('');
+    } else if (/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(value)) {
+      setBackendUrl(value);
+    } else {
+      console.error('共有データベースのURLの形式が正しくありません', value);
+    }
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
   function showSyncStatus(text, isError) {
     const el = document.getElementById('backend-status');
     if (!el) return;
@@ -148,45 +166,95 @@
     el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
   }
 
+  function nowLabel() {
+    return new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  }
+
   let saveChain = Promise.resolve();
+  let pendingSaves = 0;
+  // ローカルで変更するたびに増える。取得中に変更があったら、取得結果で上書きしない。
+  let localRevision = 0;
 
   function pushToBackend(url, data) {
     const body = JSON.stringify(data);
+    pendingSaves++;
+    showSyncStatus('保存中…', false);
     saveChain = saveChain.then(() =>
       fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body })
         .then(res => { if (!res.ok) throw new Error('HTTP ' + res.status); })
     ).then(() => {
-      showSyncStatus('保存しました(' + new Date().toLocaleTimeString('ja-JP') + ')', false);
+      pendingSaves--;
+      if (pendingSaves === 0) showSyncStatus('保存済み ' + nowLabel(), false);
     }).catch(err => {
+      pendingSaves--;
       console.error('データベースへの保存に失敗しました', err);
-      showSyncStatus('保存に失敗しました。URLやネットワークを確認してください', true);
+      showSyncStatus('保存に失敗しました(この端末には保存済み。ネットワークを確認してください)', true);
     });
     return saveChain;
   }
 
   function saveData(data) {
+    localRevision++;
     saveLocalCache(data);
     const url = getBackendUrl();
     if (url) pushToBackend(url, data);
   }
 
-  async function syncFromBackend(showAlertOnFail) {
+  // 入力や編集の途中で画面を描き直すと内容が消えるので、その間は自動取得しない
+  function isUserEditing() {
+    const el = document.activeElement;
+    if (el && ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) && el.type !== 'button') return true;
+    if (editingStaffId) return true;
+    return document.getElementById('staff-name').value.trim() !== '';
+  }
+
+  let syncing = false;
+  let lastSyncAt = 0;
+
+  async function syncFromBackend() {
     const url = getBackendUrl();
-    if (!url) return;
-    showSyncStatus('取得中...', false);
+    if (!url || syncing || pendingSaves > 0) return;
+    syncing = true;
+    const revisionAtStart = localRevision;
     try {
       const res = await fetch(url, { method: 'GET' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const json = await res.json();
-      DATA = mergeWithDefaults(json);
-      saveLocalCache(DATA);
-      renderAllTabs();
-      showSyncStatus('同期しました(' + new Date().toLocaleTimeString('ja-JP') + ')', false);
+      lastSyncAt = Date.now();
+      // 取得中にこの端末で変更があった場合は、その変更(保存処理中)を優先する
+      if (localRevision !== revisionAtStart || pendingSaves > 0) return;
+      const incoming = mergeWithDefaults(json);
+      if (JSON.stringify(incoming) !== JSON.stringify(DATA)) {
+        if (isUserEditing()) return; // 次の機会に取り込む
+        DATA = incoming;
+        saveLocalCache(DATA);
+        renderAllTabs();
+      }
+      showSyncStatus('同期済み ' + nowLabel(), false);
     } catch (e) {
       console.error('データベースからの取得に失敗しました', e);
-      showSyncStatus('取得に失敗しました。URLやネットワークを確認してください', true);
-      if (showAlertOnFail) alert('データベースからの取得に失敗しました。URLやネットワーク接続を確認してください。');
+      showSyncStatus('最新データを取得できませんでした(ネットワークを確認してください)', true);
+    } finally {
+      syncing = false;
     }
+  }
+
+  const AUTO_SYNC_INTERVAL_MS = 60 * 1000;
+  const FOCUS_SYNC_MIN_GAP_MS = 10 * 1000;
+
+  function startAutoSync() {
+    if (!getBackendUrl()) {
+      showSyncStatus('この端末のブラウザ内にのみ保存しています', false);
+      return;
+    }
+    showSyncStatus('読み込み中…', false);
+    syncFromBackend();
+    setInterval(() => { if (document.visibilityState === 'visible') syncFromBackend(); }, AUTO_SYNC_INTERVAL_MS);
+    const onReturn = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSyncAt > FOCUS_SYNC_MIN_GAP_MS) syncFromBackend();
+    };
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('focus', onReturn);
   }
 
   let DATA = loadLocalCache();
@@ -1652,22 +1720,6 @@
     });
   }
 
-  function bindBackendSettings() {
-    const input = document.getElementById('backend-url-input');
-    input.value = getBackendUrl();
-    document.getElementById('backend-connect-btn').addEventListener('click', async () => {
-      const url = input.value.trim();
-      setBackendUrl(url);
-      if (url) {
-        await syncFromBackend(true);
-      } else {
-        showSyncStatus('ローカル保存のみになりました', false);
-      }
-    });
-    document.getElementById('backend-refresh-btn').addEventListener('click', () => syncFromBackend(true));
-    if (getBackendUrl()) showSyncStatus('読み込み中...', false);
-  }
-
   function renderDefaultShiftOptions() {
     const note = { all: '', special: '(許可した人のみ)', employee: '(社員のみ)' };
     const html = '<option value="">未設定</option>' + Object.keys(PATTERNS).map(k =>
@@ -1678,6 +1730,7 @@
   // ---------- init ----------
 
   document.addEventListener('DOMContentLoaded', async () => {
+    applyBackendUrlFromHash();
     renderDefaultShiftOptions();
     initTabs();
     bindStaffForm();
@@ -1686,7 +1739,6 @@
     bindCoverageForm();
     bindGenerateButtons();
     bindDataTransferButtons();
-    bindBackendSettings();
 
     document.getElementById('availability-month').value = currentYM();
     document.getElementById('generate-month').value = currentYM();
@@ -1694,6 +1746,6 @@
 
     renderAllTabs();
 
-    if (getBackendUrl()) await syncFromBackend(false);
+    startAutoSync();
   });
 })();

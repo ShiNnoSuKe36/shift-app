@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>シフト作成アプリ</title>
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 <header class="app-header">
@@ -16,18 +16,10 @@
     <button class="tab-btn" data-tab="generate">シフト自動作成</button>
   </nav>
   <div class="header-actions">
-    <label>共有データベースURL
-      <input type="text" id="backend-url-input" placeholder="https://script.google.com/macros/s/.../exec">
-    </label>
-    <button type="button" id="backend-connect-btn" class="secondary">接続して同期</button>
-    <button type="button" id="backend-refresh-btn" class="secondary">最新の状態を取得</button>
     <span id="backend-status" class="help-text"></span>
-  </div>
-  <div class="header-actions">
     <button type="button" id="export-data-btn" class="secondary">データをエクスポート</button>
     <button type="button" id="import-data-btn" class="secondary">データをインポート</button>
     <input type="file" id="import-data-file" accept="application/json" hidden>
-    <span class="help-text">共有データベースURLを設定しない場合は、この端末のブラウザ内にのみ保存されます(エクスポート/インポートで手動移行可能)</span>
   </div>
 </header>
 
@@ -161,6 +153,6 @@
 
 </main>
 
-<script src="app.js?v=18"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>
