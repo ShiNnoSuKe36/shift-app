@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>シフト作成アプリ</title>
-<link rel="stylesheet" href="style.css?v=16">
+<link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 <header class="app-header">
@@ -66,31 +66,19 @@
       </div>
       <div class="form-row">
         <label>平日の基本シフト
-          <select id="staff-default-weekday">
-            <option value="">未設定</option>
-            <option value="p1">9:00〜14:30</option>
-            <option value="p2">14:30〜20:30</option>
-            <option value="p3">17:00〜20:30</option>
-            <option value="p4">9:00〜17:00</option>
-            <option value="p5">11:30〜20:30</option>
-            <option value="p6">8:00〜14:30</option>
-            <option value="p7">8:00〜20:30</option>
-            <option value="p8">8:00〜17:00</option>
-          </select>
+          <select id="staff-default-weekday"></select>
         </label>
         <label>休日の基本シフト
-          <select id="staff-default-weekend">
-            <option value="">未設定</option>
-            <option value="p1">9:00〜14:30</option>
-            <option value="p2">14:30〜20:30</option>
-            <option value="p3">17:00〜20:30</option>
-            <option value="p4">9:00〜17:00</option>
-            <option value="p5">11:30〜20:30</option>
-            <option value="p6">8:00〜14:30</option>
-            <option value="p7">8:00〜20:30</option>
-            <option value="p8">8:00〜17:00</option>
-          </select>
+          <select id="staff-default-weekend"></select>
         </label>
+      </div>
+      <div class="form-row">
+        <label class="avoid-label">担当できる特別パターン(許可した人だけが自動作成でこの時間帯に入ります)</label>
+        <div class="checkbox-list">
+          <label><input type="checkbox" name="staff-special-pattern" value="p4"> 9:00〜17:00</label>
+          <label><input type="checkbox" name="staff-special-pattern" value="p5"> 11:30〜20:30</label>
+        </div>
+        <p class="help-text">勤務パターンは 9:00〜20:30 / 9:00〜14:30 / 14:30〜20:30 / 17:00〜20:30(全員)、9:00〜17:00 / 11:30〜20:30(許可した人のみ)、8:00〜(社員のみ。毎日1人の社員が8:00出勤)です。できるだけ14:30で区切るシフトを優先します。</p>
       </div>
       <p class="help-text">基本シフトを設定すると、「シフト希望入力」で未記入の日はこの時間帯が自動的に希望として使われます(個別に記入すればその内容が優先されます)</p>
       <div class="form-row">
@@ -105,7 +93,7 @@
       </div>
     </form>
     <table class="data-table">
-      <thead><tr><th>名前</th><th>役職</th><th>時給</th><th>できる作業</th><th>連続勤務</th><th>組ませたくない相手</th><th>基本シフト(平日/休日)</th><th></th></tr></thead>
+      <thead><tr><th>名前</th><th>役職</th><th>時給</th><th>できる作業</th><th>連続勤務</th><th>特別パターン</th><th>組ませたくない相手</th><th>基本シフト(平日/休日)</th><th></th></tr></thead>
       <tbody id="staff-table-body"></tbody>
     </table>
   </section>
@@ -174,6 +162,6 @@
 
 </main>
 
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

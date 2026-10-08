@@ -33,16 +33,46 @@
     return !!(staff && (staff.skills || []).includes('新人'));
   }
 
+  // 勤務パターン。自動作成ではこのパターンの中からだけ割り当てる。
+  //   access: 'all' = 全員 / 'special' = スタッフごとに許可した人だけ / 'employee' = 社員だけ(8:00出勤)
+  // (キーは保存データの基本シフトで使っているので変えないこと)
   const PATTERNS = {
-    p1: { start: 9, end: 14.5 },
-    p2: { start: 14.5, end: 20.5 },
-    p3: { start: 17, end: 20.5 },
-    p4: { start: 9, end: 17 },
-    p5: { start: 11.5, end: 20.5 },
-    p6: { start: 8, end: 14.5 },
-    p7: { start: 8, end: 20.5 },
-    p8: { start: 8, end: 17 }
+    p9: { start: 9, end: 20.5, access: 'all' },
+    p1: { start: 9, end: 14.5, access: 'all' },
+    p4: { start: 9, end: 17, access: 'special' },
+    p5: { start: 11.5, end: 20.5, access: 'special' },
+    p2: { start: 14.5, end: 20.5, access: 'all' },
+    p3: { start: 17, end: 20.5, access: 'all' },
+    p7: { start: 8, end: 20.5, access: 'employee' },
+    p6: { start: 8, end: 14.5, access: 'employee' },
+    p8: { start: 8, end: 17, access: 'employee' }
   };
+  const SPECIAL_PATTERN_KEYS = Object.keys(PATTERNS).filter(k => PATTERNS[k].access === 'special');
+  // 社員は毎日1人、この時刻から出勤する(開店前の準備)
+  const EMPLOYEE_EARLY_START = 8;
+
+  function isEmployee(staff) {
+    return !!staff && (staff.jobRole || 'アルバイト') === '社員';
+  }
+
+  // 9:00〜17:00 / 11:30〜20:30 を担当できるか。
+  // 未設定の古いデータは、基本シフトにそのパターンを登録している人を「担当できる」とみなす。
+  function getSpecialPatterns(staff) {
+    if (Array.isArray(staff.specialPatterns)) return staff.specialPatterns;
+    return SPECIAL_PATTERN_KEYS.filter(k => staff.defaultWeekday === k || staff.defaultWeekend === k);
+  }
+
+  function canUsePattern(staff, key) {
+    const p = PATTERNS[key];
+    if (p.access === 'employee') return isEmployee(staff);
+    if (p.access === 'special') return getSpecialPatterns(staff).includes(key);
+    return true;
+  }
+
+  // そのスタッフが勤務を始められる最も早い時刻(社員だけは開店前の8:00から)
+  function earliestStartFor(staff, settings) {
+    return isEmployee(staff) ? Math.min(EMPLOYEE_EARLY_START, settings.openTime) : settings.openTime;
+  }
 
   function defaultData() {
     return {
@@ -184,8 +214,9 @@
   function getDefaultRangeForStaffDate(staff, dateStr, settings) {
     const key = getDayType(dateStr, settings) === 'weekend' ? staff.defaultWeekend : staff.defaultWeekday;
     const p = PATTERNS[key];
-    if (!p) return { start: settings.openTime, end: settings.closeTime };
-    return { start: Math.max(p.start, settings.openTime), end: Math.min(p.end, settings.closeTime) };
+    const earliest = earliestStartFor(staff, settings);
+    if (!p) return { start: earliest, end: settings.closeTime };
+    return { start: Math.max(p.start, earliest), end: Math.min(p.end, settings.closeTime) };
   }
 
   function getDatesInMonth(ym) {
@@ -336,6 +367,7 @@
         <td>${(s.hourlyWage || 0).toLocaleString()}円</td>
         <td>${skillsText}</td>
         <td>${s.noContinuousShift ? '午前/午後のみ' : '通し可'}</td>
+        <td>${escapeHtml(getSpecialPatterns(s).map(patternLabel).join('、') || 'なし')}</td>
         <td>${escapeHtml(avoidNames)}</td>
         <td>${escapeHtml(defaultText)}</td>
         <td>
@@ -391,6 +423,8 @@
     document.querySelectorAll('#staff-avoid-list input[type=checkbox]').forEach(cb => {
       cb.checked = (s.avoidWith || []).includes(cb.value);
     });
+    const special = getSpecialPatterns(s);
+    document.querySelectorAll('input[name="staff-special-pattern"]').forEach(cb => { cb.checked = special.includes(cb.value); });
     document.getElementById('staff-default-weekday').value = s.defaultWeekday || '';
     document.getElementById('staff-default-weekend').value = s.defaultWeekend || '';
     staffTimePriorities = JSON.parse(JSON.stringify(s.timePriorities || []));
@@ -426,6 +460,9 @@
       const avoidWith = Array.from(
         document.querySelectorAll('#staff-avoid-list input[type=checkbox]:checked')
       ).map(cb => cb.value);
+      const specialPatterns = Array.from(
+        document.querySelectorAll('input[name="staff-special-pattern"]:checked')
+      ).map(cb => cb.value);
       const defaultWeekday = document.getElementById('staff-default-weekday').value;
       const defaultWeekend = document.getElementById('staff-default-weekend').value;
       const timePriorities = staffTimePriorities.filter(p => p.start < p.end);
@@ -451,6 +488,7 @@
           s.hourlyWage = hourlyWage;
           s.jobRole = jobRole;
           s.noContinuousShift = noContinuousShift;
+          s.specialPatterns = specialPatterns;
           s.skills = skills;
           s.avoidWith = [...avoidWith];
           s.defaultWeekday = defaultWeekday;
@@ -460,7 +498,7 @@
         cancelStaffEdit();
       } else {
         const id = 's' + Date.now() + Math.floor(Math.random() * 1000);
-        DATA.staff.push({ id, name, hourlyWage, jobRole, noContinuousShift, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend, timePriorities });
+        DATA.staff.push({ id, name, hourlyWage, jobRole, noContinuousShift, specialPatterns, skills, avoidWith: [...avoidWith], defaultWeekday, defaultWeekend, timePriorities });
         avoidWith.forEach(otherId => {
           const other = DATA.staff.find(s => s.id === otherId);
           if (other) {
@@ -1065,6 +1103,9 @@
   const W_FAIR_HOURS = 2;       // 月の勤務時間の偏り(同上)
   const W_PRIORITY = 3;         // スタッフの時間帯優先度(30分枠ごと)
   const W_ROLE_OVERLAP = 5;     // 社員どうしの重複(30分枠ごと)
+  const W_EARLY_MISSING = 2000; // 8:00出勤の社員がいない日(1時間分の不足として扱う)
+  const W_EARLY_EXTRA = 50;     // 8:00出勤の社員が2人以上(1人増えるごと)
+  const W_LONG_SHIFT = 20;      // 14:30をまたぐ長いシフト(できるだけ14:30で区切る)
   const W_LABOR = 1;            // 勤務時間そのもの(30分枠ごと。不要な配置や長すぎる配置を減らす)
   const W_NEWBIE_ALONE = 1000;  // 新人が「最低人数を満たしていない時間帯」や「新人どうし」で入っている(30分枠×人数ごと)
   const GREEDY_LOAD_WEIGHT = 10; // 初期案(貪欲法)で、すでに多く入っている人を後回しにする強さ
@@ -1174,13 +1215,20 @@
 
     // coverage: 不足・目標未達だけの評価(人を追加する価値があるかの判定に使う)
     let coverage = 0;
+    let penalty0 = 0;
     for (let i = 0; i < n; i++) {
       coverage += Math.max(0, head[i]) * W_SHORTAGE;
       for (const k in skill[i]) coverage += Math.max(0, skill[i][k]) * W_SHORTAGE;
       for (const k in role[i]) coverage += Math.max(0, role[i][k]) * W_SHORTAGE;
       coverage += Math.max(0, head[i] + tmpl.extra[i]) * W_DESIRED;
     }
-    let penalty = coverage;
+    // 社員のうち1人は毎日8:00出勤
+    if (day.needsEarly) {
+      const early = withRoles.filter(a => a.start <= EMPLOYEE_EARLY_START + 1e-9 && isEmployee(staffMap[a.staffId])).length;
+      if (early === 0) coverage += W_EARLY_MISSING;
+      else penalty0 = (early - 1) * W_EARLY_EXTRA;
+    }
+    let penalty = coverage + penalty0;
     // 新人は、新人以外で最低人数を満たしている時間帯に、新人1人ずつで入れる
     for (let i = 0; i < n; i++) {
       if (newbies[i] === 0) continue;
@@ -1190,6 +1238,7 @@
     for (let i = 0; i < withRoles.length; i++) {
       const a = withRoles[i], sa = staffMap[a.staffId];
       penalty += (a.end - a.start) * 2 * W_LABOR;
+      if (crossesAmPm(a.start, a.end)) penalty += W_LONG_SHIFT;
       const pk = a.staffId + '|' + a.start + '|' + a.end;
       let prio = tmpl.prio.get(pk);
       if (prio === undefined) { prio = priorityScoreForCandidate(sa, a, day.slots); tmpl.prio.set(pk, prio); }
@@ -1207,45 +1256,38 @@
     return { penalty, coverage, withRoles };
   }
 
-  // スタッフがその日に入れる時間帯の候補。
-  // 希望時間帯そのものに加えて、その中に収まる基本パターン(9:00〜14:30 など)も候補にする。
-  // これで「終日OK」の人を毎回丸一日入れるのではなく、午前だけ・午後だけにも振り分けられる。
-  // (通し勤務不可の人は、14:30をまたぐ候補を除き、午前・午後に分けた候補にする)
+  // スタッフがその日に入れる時間帯の候補 = 希望時間帯に収まる勤務パターン(そのスタッフが担当できるものだけ)。
+  // 社員は開店から入れる日なら8:00出勤のパターンも候補にする。
+  // 通し勤務不可の人は、14:30をまたぐパターンを除く。
   function buildDayCandidates(dateStr) {
     const cands = [];
+    const settings = DATA.settings;
     DATA.staff.forEach(s => {
       let rec = DATA.availability[s.id + '__' + dateStr];
       if (!rec) {
-        const def = getDefaultRangeForStaffDate(s, dateStr, DATA.settings);
+        const def = getDefaultRangeForStaffDate(s, dateStr, settings);
         rec = { type: 'range', start: def.start, end: def.end };
       }
       if (rec.type === 'off' || rec.type === 'invalid') return;
-      const start = Math.max(rec.start, DATA.settings.openTime);
-      const end = Math.min(rec.end, DATA.settings.closeTime);
+      const earliest = earliestStartFor(s, settings);
+      // 開店から入れる社員は、開店前の早出もできるとみなす
+      const start = rec.start <= settings.openTime + 1e-9 ? earliest : Math.max(rec.start, earliest);
+      const end = Math.min(rec.end, settings.closeTime);
       if (!(start < end)) return;
-      const crossesSplit = (st, en) => st < AM_PM_SPLIT - 1e-9 && en > AM_PM_SPLIT + 1e-9;
-      const windows = [];
-      if (s.noContinuousShift && crossesSplit(start, end)) {
-        windows.push([start, AM_PM_SPLIT], [AM_PM_SPLIT, end]);
-      } else {
-        windows.push([start, end]);
-      }
-      Object.values(PATTERNS).forEach(p => {
-        const ps = Math.max(p.start, DATA.settings.openTime);
-        const pe = Math.min(p.end, DATA.settings.closeTime);
-        if (!(ps < pe) || ps < start - 1e-9 || pe > end + 1e-9) return;
-        if (s.noContinuousShift && crossesSplit(ps, pe)) return;
-        windows.push([ps, pe]);
-      });
-      const seen = new Set();
-      windows.forEach(([st, en]) => {
-        const k = st + '-' + en;
-        if (seen.has(k)) return;
-        seen.add(k);
-        cands.push({ staffId: s.id, start: st, end: en });
+      Object.keys(PATTERNS).forEach(key => {
+        const p = PATTERNS[key];
+        if (!canUsePattern(s, key)) return;
+        const pe = Math.min(p.end, settings.closeTime);
+        if (!(p.start < pe) || p.start < start - 1e-9 || pe > end + 1e-9) return;
+        if (s.noContinuousShift && crossesAmPm(p.start, pe)) return;
+        cands.push({ staffId: s.id, start: p.start, end: pe });
       });
     });
     return cands;
+  }
+
+  function crossesAmPm(start, end) {
+    return start < AM_PM_SPLIT - 1e-9 && end > AM_PM_SPLIT + 1e-9;
   }
 
   // 月の出勤可能日数と勤務可能時間(その日に入れる最長の時間帯の合計)
@@ -1275,7 +1317,10 @@
 
     // 1) 日ごとの貪欲法で初期案を作る(すでに出勤率が高い人ほど後回し)
     const days = getDatesInMonth(ym).map(d => {
-      const day = { dateStr: d.dateStr, dayType: getDayType(d.dateStr, DATA.settings), slots, cands: buildDayCandidates(d.dateStr) };
+      const day = {
+        dateStr: d.dateStr, dayType: getDayType(d.dateStr, DATA.settings), slots,
+        cands: buildDayCandidates(d.dateStr), needsEarly: DATA.staff.some(isEmployee)
+      };
       const r = solveDayCoverage(day.cands, DATA.settings, staffMap, loadOf, day.dayType);
       day.assigned = r.assignments.map(a => ({ staffId: a.staffId, start: a.start, end: a.end }));
       day.assigned.forEach(a => addLoad(a, 1));
@@ -1369,8 +1414,16 @@
     assignments.forEach(a => {
       applyAssignmentToNeed(a, slots, headNeed, skillNeed, jobRoleNeed, staffMap[a.staffId] || { skills: [], jobRole: 'アルバイト' });
     });
+    const shortages = deriveShortages(slots, headNeed, skillNeed, jobRoleNeed);
+    const hasEarly = assignments.some(a => a.start <= EMPLOYEE_EARLY_START + 1e-9 && isEmployee(staffMap[a.staffId]));
+    if (DATA.staff.some(isEmployee) && !hasEarly) {
+      shortages.unshift({
+        start: EMPLOYEE_EARLY_START, end: DATA.settings.openTime, headShort: 0,
+        missingSkills: [], missingRoles: ['8:00出勤の社員×1']
+      });
+    }
     return {
-      shortages: deriveShortages(slots, headNeed, skillNeed, jobRoleNeed),
+      shortages,
       desiredShortages: deriveDesiredShortages(slots, headNeed, desiredExtra)
     };
   }
@@ -1638,9 +1691,17 @@
     if (getBackendUrl()) showSyncStatus('読み込み中...', false);
   }
 
+  function renderDefaultShiftOptions() {
+    const note = { all: '', special: '(許可した人のみ)', employee: '(社員のみ)' };
+    const html = '<option value="">未設定</option>' + Object.keys(PATTERNS).map(k =>
+      `<option value="${k}">${patternLabel(k)}${note[PATTERNS[k].access]}</option>`).join('');
+    ['staff-default-weekday', 'staff-default-weekend'].forEach(id => { document.getElementById(id).innerHTML = html; });
+  }
+
   // ---------- init ----------
 
   document.addEventListener('DOMContentLoaded', async () => {
+    renderDefaultShiftOptions();
     initTabs();
     bindStaffForm();
     bindStaffTimePriorityControls();
